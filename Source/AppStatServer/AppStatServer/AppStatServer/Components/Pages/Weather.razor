@@ -1,0 +1,56 @@
+﻿@page "/weather"
+@using AppStatServer.Data
+@attribute [StreamRendering]
+
+<PageTitle>Weather</PageTitle>
+
+<h1>Weather</h1>
+
+<p>This component demonstrates showing data.</p>
+
+@if (events == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>name</th>
+                <th>count</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var ev in events)
+            {
+                <tr>
+                    <td>@ev.Name</td>
+                    <td>@ev.count</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    [Inject] ApplicationDbContext DbContext { get; set; } = null!;
+
+    private List<EventGroup>? events = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var groups = DbContext.Events.GroupBy(x => x.Message);
+
+        foreach (var group in groups)
+        {
+            events.Add(new EventGroup(
+                group.Key,
+                group.Count(), "", ""
+            ));
+        }
+    }
+
+    private record EventGroup(string Name, int count, string ver, string os);
+
+}
