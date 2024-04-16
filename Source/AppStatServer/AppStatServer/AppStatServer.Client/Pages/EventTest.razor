@@ -1,0 +1,53 @@
+﻿@page "/eventSend"
+@using System.Diagnostics
+@using System.Net.Http.Headers
+@rendermode InteractiveWebAssembly
+
+<PageTitle>Test sentry backend</PageTitle>
+
+<h1>Send events</h1>
+
+<p role="status">Events sent: @currentCount</p>
+
+<button class="btn btn-primary" @onclick="TestSentry">Send events</button>
+
+<span>@Message</span>
+
+@code {
+    private int currentCount = 0;
+    private string Message { get; set; } = "";
+
+    private async Task TestSentry()
+    {
+        using (SentrySdk.Init(o =>
+               {
+                   o.Dsn = "https://5e79a97ae19d4187becbc9e4cdf2de52@localhost:7019/1";
+                   o.SendClientReports = false;
+                   o.AutoSessionTracking = true;
+                   o.StackTraceMode = StackTraceMode.Enhanced;
+                   o.IsGlobalModeEnabled = true;
+                   o.ReportAssembliesMode = ReportAssembliesMode.None;
+                   //o.Debug = true;
+                   //o.RequestBodyCompressionLevel = System.IO.Compression.CompressionLevel.NoCompression;
+               }))
+        {
+            SentrySdk.ConfigureScope(s => s.User.Id = Guid.NewGuid().ToString());
+
+            Message = $"Sending events...";
+            StateHasChanged();
+            var rnd = new Random();
+
+            for (int i = 0; i < 50; i++)
+            {
+                currentCount = i;
+                StateHasChanged();
+                var msg = $"Web Assembly test error";
+                SentrySdk.CaptureException(new Exception(msg));
+                await Task.Delay(rnd.Next(10, 40));
+            }
+
+            Message = $"Finished sending {currentCount} events";
+            StateHasChanged();
+        }
+    }
+}

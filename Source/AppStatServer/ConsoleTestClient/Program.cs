@@ -21,7 +21,7 @@ Task.Run(async () =>
         {
             for (int i = 0; i < 50; i++)
             {
-                var msg = "test " + j + "_" + i;
+                var msg = "Console test error";
                 SentrySdk.CaptureException(new Exception(msg));
                 Console.WriteLine(msg);
                 await Task.Delay(rnd.Next(10,40));

@@ -1,0 +1,73 @@
+﻿@page "/events"
+@using AppStatServer.Data
+@using Humanizer
+@using Microsoft.EntityFrameworkCore
+@attribute [StreamRendering]
+
+<PageTitle>Events</PageTitle>
+
+<h1>Events</h1>
+
+@if (_events == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>name</th>
+                <th>os</th>
+                <th>version</th>
+                <th>count</th>
+                <th>level</th>
+                <th>last occured</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var ev in _events.OrderByDescending(x=>x.lastOccured))
+            {
+                <tr>
+                    <td>@ev.Name</td>
+                    <td>@ev.os</td>
+                    <td>@ev.ver</td>
+                    <td>@ev.count</td>
+                    <td>@ev.level</td>
+                    <td>@ev.lastOccured.Humanize(false)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    [Inject] ApplicationDbContext DbContext { get; set; } = null!;
+
+    private readonly List<EventGroup>? _events = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var groups = await DbContext.Events
+            .GroupBy(x => new { x.Message, x.Os, x.Release, x.Level })
+            .ToListAsync();
+
+
+        foreach (var group in groups)
+        {
+            var lastOccured = group.Max(x => x.Timestamp);
+
+            _events.Add(new EventGroup(
+                group.Key.Message,
+                group.Count(),
+                group.Key.Release,
+                group.Key.Os ?? "",
+                group.Key.Level,
+                lastOccured
+            ));
+        }
+    }
+
+    private record EventGroup(string Name, int count, string ver, string os, string level, DateTime lastOccured);
+
+}

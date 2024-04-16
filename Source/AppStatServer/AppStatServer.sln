@@ -3,11 +3,13 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.10.34804.81
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppStatServer", "AppStatServer\AppStatServer\AppStatServer.csproj", "{943F1259-F1F8-49E9-9594-51E00CE2DA9C}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AppStatServer", "AppStatServer\AppStatServer\AppStatServer.csproj", "{943F1259-F1F8-49E9-9594-51E00CE2DA9C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppStatServer.Client", "AppStatServer\AppStatServer.Client\AppStatServer.Client.csproj", "{995E55B4-64D6-472A-9C0D-F2B667EAEE07}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AppStatServer.Client", "AppStatServer\AppStatServer.Client\AppStatServer.Client.csproj", "{995E55B4-64D6-472A-9C0D-F2B667EAEE07}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConsoleTestClient", "ConsoleTestClient\ConsoleTestClient.csproj", "{50B380B7-E367-41C6-B501-F40DCE4CCDF3}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ConsoleTestClient", "ConsoleTestClient\ConsoleTestClient.csproj", "{50B380B7-E367-41C6-B501-F40DCE4CCDF3}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "TestClients", "TestClients", "{58232895-04C7-4F0B-BA96-B1C650AB49D5}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -30,6 +32,9 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{50B380B7-E367-41C6-B501-F40DCE4CCDF3} = {58232895-04C7-4F0B-BA96-B1C650AB49D5}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {F2D21728-A53B-458F-BD5D-185391D54733}
