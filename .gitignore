@@ -397,3 +397,4 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 /Source/AppStatServer/AppStatServer/AppStatServer/appstat.db
+/Source/AppStatServer/AppStatServer/AppStatServer/appsettings.json
