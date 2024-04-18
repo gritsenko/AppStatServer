@@ -43,6 +43,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
         case "MsSqlConnection":
             options.UseSqlServer(connectionString);
             break;
+        case "MySqlConnection":
+            options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
+            break;
     }
 });
 

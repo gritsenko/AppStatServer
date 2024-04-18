@@ -101,6 +101,10 @@ public class EnvelopeHandler
             var os = eventEntry.contexts?.os?.raw_description;
             var user = eventEntry.user?.id ?? Guid.Empty.ToString();
 
+            var stackTrace = "";
+            if (isError || isCrash)
+                stackTrace = eventEntry.threads.values.FirstOrDefault().stacktrace.ToString();
+
             if (!string.IsNullOrWhiteSpace(message))
             {
                 eventsQueue.Enqueue(new AppEvent()
@@ -117,7 +121,8 @@ public class EnvelopeHandler
                     SpanId = spanId,
                     TraceId = traceId,
                     Os = os,
-                    UserId = user
+                    UserId = user,
+                    StackTrace = stackTrace
                 });
 
                 return eventEntry.event_id;
