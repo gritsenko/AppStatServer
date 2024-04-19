@@ -1,4 +1,6 @@
-﻿namespace AppStatServer.Data;
+﻿using AppStatServer.Sentry;
+
+namespace AppStatServer.Data;
 
 public class AppEvent
 {
