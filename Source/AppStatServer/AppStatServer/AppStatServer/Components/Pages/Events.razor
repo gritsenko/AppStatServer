@@ -1,4 +1,5 @@
 ﻿@page "/events"
+@using System.Web
 @using AppStatServer.Data
 @using Humanizer
 @using Microsoft.EntityFrameworkCore
@@ -29,7 +30,7 @@ else
             @foreach (var ev in _events.OrderByDescending(x=>x.lastOccured))
             {
                 <tr>
-                    <td>@ev.Name</td>
+                    <td><a href="event?EventName=@HttpUtility.UrlEncode(ev.Name)"> @ev.Name </a></td>
                     <td>@ev.os</td>
                     <td>@ev.ver</td>
                     <td>@ev.count</td>

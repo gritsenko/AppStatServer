@@ -1,0 +1,68 @@
+﻿@page "/event"
+@using AppStatServer.Data
+@using Humanizer
+@using Microsoft.EntityFrameworkCore
+@attribute [StreamRendering]
+
+<PageTitle>Events</PageTitle>
+
+<h1>Events</h1>
+
+@if (_events == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <h2>@Title</h2>
+    <h3>@EventType</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>os</th>
+                <th>version</th>
+                <th>last occured</th>
+                <td>Stack trace</td>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var ev in _events.OrderByDescending(x => x.Timestamp))
+            {
+                <tr>
+                    <td>@ev.Os</td>
+                    <td>@ev.Release</td>
+                    <td>@ev.Timestamp.Humanize(false)</td>
+                    <td>@ev.StackTrace</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    [Inject] ApplicationDbContext DbContext { get; set; } = null!;
+
+    [Parameter, SupplyParameterFromQuery]
+    public string EventName { get; set; }
+
+    private List<AppEvent>? _events = new();
+
+    public string? Title { get; set; } = "Message";
+    public string? EventType { get; set; } = "Info";
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        _events = await DbContext.Events
+            .Where(x => x.Message == EventName)
+            .ToListAsync();
+
+        var firstEvent = _events.FirstOrDefault();
+
+        if (firstEvent != null)
+        {
+            Title = firstEvent.Message;
+            EventType = firstEvent.Level;
+        }
+    }
+}

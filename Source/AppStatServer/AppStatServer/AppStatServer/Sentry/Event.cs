@@ -1,4 +1,6 @@
-﻿namespace AppStatServer.Sentry;
+﻿using System.Text;
+
+namespace AppStatServer.Sentry;
 
 public class ExceptionValue
 {
@@ -24,7 +26,33 @@ public class StacktraceFrame
 
 public class StacktraceValue
 {
-    public List<StacktraceFrame> frames { get; set; }
+    public List<StacktraceFrame>? frames { get; set; }
+
+    public override string ToString()
+    {
+        if (frames == null)
+            return "";
+        return FormatStackTrace(frames);
+    }
+
+    public static string FormatStackTrace(List<StacktraceFrame> stackTraceFrames)
+    {
+        StringBuilder formattedStackTrace = new StringBuilder();
+        int frameIndex = 1;
+        foreach (var frame in stackTraceFrames)
+        {
+            if (frameIndex == 1)
+            {
+                formattedStackTrace.AppendLine($"Exception in thread \"{frame.package}\" {frame.function}");
+            }
+            else
+            {
+                formattedStackTrace.AppendLine($"\tat {frame.package}.{frame.function}({frame.filename}:{frame.lineno})");
+            }
+            frameIndex++;
+        }
+        return formattedStackTrace.ToString();
+    }
 }
 
 public class ExceptionInfo

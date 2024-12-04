@@ -1,4 +1,6 @@
-﻿namespace AppStatServer.Data;
+﻿using AppStatServer.Sentry;
+
+namespace AppStatServer.Data;
 
 public class AppEvent
 {
@@ -20,4 +22,5 @@ public class AppEvent
     public string? TraceId { get; set; }
     public string? Os { get; set; }
     public string UserId { get; set; }
+    public string? StackTrace { get; set; }
 }
