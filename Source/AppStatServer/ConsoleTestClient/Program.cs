@@ -4,7 +4,7 @@ Task.Run(async () =>
 {
     using (SentrySdk.Init(o =>
            {
-               o.Dsn = "https://5e79a97ae19d4187becbc9e4cdf2de52@localhost:7019/1";
+               o.Dsn = "http://5e79a97ae19d4187becbc9e4cdf2de52@localhost:5012/1";
                o.SendClientReports = false;
                o.AutoSessionTracking = true;
                o.StackTraceMode = StackTraceMode.Enhanced;
@@ -19,12 +19,12 @@ Task.Run(async () =>
         var rnd = new Random();
         await Parallel.ForAsync(0, 1, async (j, ct) =>
         {
-            for (int i = 0; i < 50; i++)
+            for (int i = 0; i < 10000; i++)
             {
                 var msg = "Console test error";
                 SentrySdk.CaptureException(new Exception(msg));
                 Console.WriteLine(msg);
-                await Task.Delay(rnd.Next(10,40));
+                await Task.Delay(rnd.Next(1,2));
             }
         });
 

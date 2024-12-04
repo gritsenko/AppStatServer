@@ -1,0 +1,11 @@
+@AppStatServerLite_HostAddress = http://localhost:5012
+
+GET {{AppStatServerLite_HostAddress}}/events/
+Accept: application/json
+
+###
+
+GET {{AppStatServerLite_HostAddress}}/events/1
+Accept: application/json
+
+###
