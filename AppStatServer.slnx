@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/ConsoleTestClient/ConsoleTestClient.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/AppStatServerLite/AppStatServerLite.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AppStatServerLite.Tests/AppStatServerLite.Tests.csproj" />
+  </Folder>
+</Solution>
