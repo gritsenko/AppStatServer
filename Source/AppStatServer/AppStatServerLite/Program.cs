@@ -13,12 +13,15 @@ builder.Services.AddSingleton<IEventStorage, LiteDbEventStorage>(services => new
 
 var app = builder.Build();
 
-var todosApi = app.MapGroup("/events");
-todosApi.MapGet("/", (IEventStorage es) => es.GetRecentEventsAsync());
-todosApi.MapGet("/{id}", async (string id, IEventStorage es) =>
-    (await es.GetRecentEventsAsync()).FirstOrDefault(a => a.Id == id) is { } todo
-        ? Results.Ok(todo)
+var eventsApi = app.MapGroup("/events");
+eventsApi.MapGet("/", (IEventStorage es) => es.GetRecentEventsAsync());
+eventsApi.MapGet("/{id}", async (string id, IEventStorage es) =>
+    (await es.GetRecentEventsAsync()).FirstOrDefault(a => a.Id == id) is { } ev
+        ? Results.Ok(ev)
         : Results.NotFound());
+
+var sessionsApi = app.MapGroup("/sessions");
+sessionsApi.MapGet("/", (IEventStorage es) => es.GetRecentSessionsAsync());
 
 _ = new EnvelopeHandler(app);
 

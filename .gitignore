@@ -398,3 +398,7 @@ FodyWeavers.xsd
 *.sln.iml
 /Source/AppStatServer/AppStatServer/AppStatServer/appstat.db
 /Source/AppStatServer/AppStatServer/AppStatServer/appsettings.json
+
+# LiteDB runtime data files
+*.db
+*-log.db
