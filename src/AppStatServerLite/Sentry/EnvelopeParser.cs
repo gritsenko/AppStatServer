@@ -99,7 +99,7 @@ public static partial class EnvelopeParser
     {
         return new AppSession
         {
-            Id = session.sid,
+            Id = session.sid ?? string.Empty,
             DeviceId = session.did,
             Started = session.started,
             Timestamp = session.timestamp,

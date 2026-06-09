@@ -1,6 +1,7 @@
 ﻿Console.WriteLine("Test sentry");
 
-Task.Run(async () =>
+// Fire-and-forget: keep emitting events in the background while we wait on Console.ReadLine().
+_ = Task.Run(async () =>
 {
     using (SentrySdk.Init(o =>
            {
