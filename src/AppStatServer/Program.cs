@@ -5,6 +5,7 @@ using AppStatServer;
 using AppStatServer.Auth;
 using AppStatServer.Sentry;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.Cookies;
 
 var builder = WebApplication.CreateSlimBuilder(args);
@@ -15,7 +16,17 @@ builder.Services.AddSingleton<IEventStorage, LiteDbEventStorage>(_ => new LiteDb
 // Cookie authentication protects the dashboard and the read API. The single set of
 // credentials comes from configuration (Auth:Username / Auth:Password), overridable
 // via the Auth__Username / Auth__Password environment variables.
-builder.Services.AddDataProtection();
+// Persist the data-protection keys (used to sign auth cookies) to a stable directory when
+// configured, so cookies survive restarts. Without DataProtection:KeyPath the framework
+// default location is used (fine for local dev).
+var dataProtectionKeyPath = builder.Configuration["DataProtection:KeyPath"];
+var dataProtection = builder.Services.AddDataProtection();
+if (!string.IsNullOrWhiteSpace(dataProtectionKeyPath))
+{
+    Directory.CreateDirectory(dataProtectionKeyPath);
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyPath));
+}
+
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
