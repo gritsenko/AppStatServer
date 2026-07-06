@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using AppStatServer.Data;
 using LiteDB;
 
@@ -47,6 +48,94 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         var col = _db.GetCollection<AppSession>("sessions");
         var result = col.Find(x => true, 0, 100);
         return Task.FromResult(result.ToImmutableList());
+    }
+
+    public Task SaveTrackEventsAsync(IEnumerable<TrackEvent> trackEvents)
+    {
+        var col = _db.GetCollection<TrackEvent>("trackevents");
+        col.Insert(trackEvents);
+        return Task.CompletedTask;
+    }
+
+    public Task<ImmutableList<TrackEvent>> GetRecentTrackEventsAsync()
+    {
+        var col = _db.GetCollection<TrackEvent>("trackevents");
+        var result = col.Find(x => true, 0, 100);
+        return Task.FromResult(result.ToImmutableList());
+    }
+
+    public Task<EventReport> GetEventReportAsync(int days)
+    {
+        var col = _db.GetCollection<TrackEvent>("trackevents");
+
+        // Same local-time window handling as GetAnalyticsAsync.
+        var today = DateTime.Now.Date;
+        var start = today.AddDays(-(days - 1));
+        var dayList = Enumerable.Range(0, days).Select(i => start.AddDays(i)).ToList();
+
+        var all = col.Find(e => e.Timestamp >= start).ToList();
+
+        var perName = all
+            .GroupBy(e => e.Name)
+            .Select(g => new EventStat
+            {
+                Name = g.Key,
+                Count = g.Count(),
+                Users = g.Select(e => e.UserId).Where(u => !string.IsNullOrEmpty(u)).Distinct().Count(),
+                FirstSeen = g.Min(e => e.Timestamp),
+                LastSeen = g.Max(e => e.Timestamp),
+                Properties = BuildPropertyBreakdowns(g),
+            })
+            .OrderByDescending(s => s.Count)
+            .ToList();
+
+        var report = new EventReport
+        {
+            Days = days,
+            TotalEvents = all.Count,
+            DistinctNames = perName.Count,
+            Users = all.Select(e => e.UserId).Where(u => !string.IsNullOrEmpty(u)).Distinct().Count(),
+            EventsPerDay = dayList.Select(d => new DailyCount
+            {
+                Date = d.ToString("yyyy-MM-dd"),
+                Count = all.Count(e => e.Timestamp.Date == d),
+            }).ToList(),
+            Events = perName,
+        };
+
+        return Task.FromResult(report);
+    }
+
+    // Per-property value distribution for one event name: top values by frequency, capped
+    // so a high-cardinality property (e.g. a raw price) can't blow up the response payload.
+    private static List<PropertyBreakdown> BuildPropertyBreakdowns(IEnumerable<TrackEvent> events)
+    {
+        const int maxKeys = 12;
+        const int maxValues = 8;
+
+        var byKey = new Dictionary<string, Dictionary<string, int>>();
+        foreach (var e in events)
+            foreach (var (key, value) in e.Properties)
+            {
+                if (!byKey.TryGetValue(key, out var counts))
+                    byKey[key] = counts = new Dictionary<string, int>();
+                var label = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+                counts[label] = counts.GetValueOrDefault(label) + 1;
+            }
+
+        return byKey
+            .OrderByDescending(kv => kv.Value.Values.Sum())
+            .Take(maxKeys)
+            .Select(kv => new PropertyBreakdown
+            {
+                Key = kv.Key,
+                Values = kv.Value
+                    .OrderByDescending(v => v.Value)
+                    .Take(maxValues)
+                    .Select(v => new CountByKey { Key = v.Key, Count = v.Value })
+                    .ToList(),
+            })
+            .ToList();
     }
 
     public Task<DashboardStats> GetStatsAsync()

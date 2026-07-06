@@ -53,3 +53,32 @@ public class EventGroup
 
     public AppEvent Sample { get; set; } = new(); // latest occurrence (carries the stack trace)
 }
+
+// Product-analytics report over the custom track-events collection, for a rolling window.
+public class EventReport
+{
+    public int Days { get; set; }
+    public int TotalEvents { get; set; }
+    public int DistinctNames { get; set; }   // number of distinct event names
+    public int Users { get; set; }           // distinct users across all events in the window
+    public List<DailyCount> EventsPerDay { get; set; } = [];
+    public List<EventStat> Events { get; set; } = []; // one row per event name, most frequent first
+}
+
+// One event name rolled up: how often, by how many users, and its property value distribution.
+public class EventStat
+{
+    public string Name { get; set; } = string.Empty;
+    public int Count { get; set; }
+    public int Users { get; set; }
+    public DateTime FirstSeen { get; set; }
+    public DateTime LastSeen { get; set; }
+    public List<PropertyBreakdown> Properties { get; set; } = [];
+}
+
+// Value distribution for a single property key of an event (e.g. productId -> {pro: 12, lite: 3}).
+public class PropertyBreakdown
+{
+    public string Key { get; set; } = string.Empty;
+    public List<CountByKey> Values { get; set; } = [];
+}

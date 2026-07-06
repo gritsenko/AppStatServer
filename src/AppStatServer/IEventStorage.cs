@@ -11,6 +11,9 @@ public interface IEventStorage
     Task SaveSessionsAsync(IEnumerable<AppSession> sessions);
     Task<ImmutableList<AppSession>> GetRecentSessionsAsync();
 
+    Task SaveTrackEventsAsync(IEnumerable<TrackEvent> trackEvents);
+    Task<ImmutableList<TrackEvent>> GetRecentTrackEventsAsync();
+
     Task<DashboardStats> GetStatsAsync();
 
     Task<AnalyticsData> GetAnalyticsAsync(int days);
@@ -20,4 +23,6 @@ public interface IEventStorage
     Task<ImmutableList<EventGroup>> GetEventGroupsAsync(bool crashesOnly, string? release = null, string? os = null);
 
     Task<Facets> GetFacetsAsync();
+
+    Task<EventReport> GetEventReportAsync(int days);
 }

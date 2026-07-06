@@ -451,6 +451,17 @@ pre.stack {
   margin: 0;
 }
 
+/* ---------- Event property breakdown (modal) ---------- */
+.prop-title { margin: 4px 0 12px; font-size: 13px; color: var(--text-2); font-weight: 600; }
+.prop-block { margin-bottom: 16px; }
+.prop-block h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
 @media (max-width: 900px) {
   .cards { grid-template-columns: repeat(2, 1fr); }
   .panels { grid-template-columns: 1fr; }

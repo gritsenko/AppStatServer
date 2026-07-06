@@ -8,6 +8,7 @@ const modalBody = document.getElementById("modal-body");
 
 const cache = {};
 let analyticsDays = 30;
+let eventsDays = 30;
 
 // ---------- data ----------
 async function fetchJson(url) {
@@ -25,6 +26,7 @@ const views = {
   overview: renderOverview,
   analytics: renderAnalytics,
   events: renderEvents,
+  logs: renderLogs,
   crashes: renderCrashes,
 };
 
@@ -278,11 +280,82 @@ async function renderAnalytics() {
 const eventsFilter = { release: "", os: "" };
 const crashesFilter = { release: "", os: "" };
 
-function renderEvents() {
+// Custom product events (sent to /api/track), aggregated into a report.
+async function renderEvents() {
+  if (!cache.eventsReport || cache.eventsReport.days !== eventsDays) {
+    cache.eventsReport = { days: eventsDays, data: await fetchJson("/api/events-report?days=" + eventsDays) };
+  }
+  const r = cache.eventsReport.data;
+
+  view.innerHTML = `
+    <div class="page-head">
+      <h1>Events</h1>
+      <span class="page-sub">Custom product events · last ${r.days} days</span>
+    </div>
+    <div class="toolbar">
+      <div class="range">
+        ${[7, 14, 30, 90].map((d) => `<button class="range-btn ${d === eventsDays ? "active" : ""}" data-days="${d}">${d}d</button>`).join("")}
+      </div>
+    </div>
+    <section class="cards tiles">
+      ${statTile("Total events", r.totalEvents)}
+      ${statTile("Event types", r.distinctNames)}
+      ${statTile("Users", r.users, "sessions")}
+    </section>
+    <section class="panel wide"><h2>Events per day</h2><div id="ev-chart"></div></section>
+    <div class="toolbar"><input class="search" id="ev-search" type="search" placeholder="Search event name…" /></div>
+    <div class="table-wrap" id="ev-table"></div>`;
+
+  renderBarChart(
+    document.getElementById("ev-chart"),
+    (r.eventsPerDay || []).map((d) => ({ label: d.date.slice(5), value: d.count }))
+  );
+
+  document.getElementById("ev-search").addEventListener("input", drawEventsTable);
+  drawEventsTable();
+
+  document.querySelectorAll(".range-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      eventsDays = Number(b.dataset.days);
+      renderEvents();
+    });
+  });
+}
+
+function drawEventsTable() {
+  const r = cache.eventsReport.data;
+  const q = document.getElementById("ev-search").value.trim().toLowerCase();
+  const rows = (r.events || []).filter((e) => !q || e.name.toLowerCase().includes(q));
+  const host = document.getElementById("ev-table");
+  if (!rows.length) {
+    host.innerHTML = r.totalEvents
+      ? '<div class="empty">No matching events.</div>'
+      : '<div class="empty">No custom events yet. Send them with <code>POST /api/track</code> — see AppStatTrackingClient.cs.</div>';
+    return;
+  }
+  host.innerHTML =
+    `<table><thead><tr><th>Event</th><th class="num">Count</th><th class="num">Users</th><th>Last seen</th></tr></thead><tbody>` +
+    rows
+      .map(
+        (e, i) => `<tr class="clickable" data-i="${i}">
+          <td class="msg"><div class="text">${escapeHtml(e.name)}</div></td>
+          <td class="num"><b>${e.count}</b></td>
+          <td class="num">${e.users}</td>
+          <td class="time" title="${fmtTime(e.lastSeen)}">${timeAgo(e.lastSeen)}</td></tr>`
+      )
+      .join("") +
+    `</tbody></table>`;
+  host.querySelectorAll("tr.clickable").forEach((tr) => {
+    tr.addEventListener("click", () => openTrackEventModal(rows[Number(tr.dataset.i)]));
+  });
+}
+
+// Non-crash Sentry log messages, grouped (the view "Events" used to show).
+function renderLogs() {
   return renderGroupsPage({
     endpoint: "/api/event-groups",
-    title: "Events",
-    subtitle: "Grouped by message",
+    title: "Logs",
+    subtitle: "Non-crash Sentry events grouped by message",
     withLevel: true,
     countHeader: "Events",
     filter: eventsFilter,
@@ -430,6 +503,33 @@ function openEventModal(ev, group) {
     : '<p style="color:var(--muted)">No stack trace.</p>';
 
   modalBody.innerHTML = `<dl class="kv">${rows}</dl>${stack}`;
+  modalBackdrop.classList.add("open");
+}
+
+// Detail for a custom event: totals + a value breakdown per property key.
+function openTrackEventModal(stat) {
+  modalTitle.innerHTML = `<span class="badge lvl-info">event</span> ${escapeHtml(stat.name)}`;
+
+  const meta = [
+    ["Occurrences", String(stat.count)],
+    ["Users", String(stat.users)],
+    ["First seen", fmtTime(stat.firstSeen)],
+    ["Last seen", fmtTime(stat.lastSeen)],
+  ]
+    .map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd class="mono">${escapeHtml(v)}</dd>`)
+    .join("");
+
+  const props = stat.properties || [];
+  const propsHtml = props.length
+    ? `<h3 class="prop-title">Properties</h3>` +
+      props.map((p) => `<div class="prop-block"><h4>${escapeHtml(p.key)}</h4><div class="breakdown"></div></div>`).join("")
+    : '<p style="color:var(--muted)">No properties on this event.</p>';
+
+  modalBody.innerHTML = `<dl class="kv">${meta}</dl>${propsHtml}`;
+
+  const blocks = modalBody.querySelectorAll(".prop-block .breakdown");
+  props.forEach((p, i) => renderHBars(blocks[i], (p.values || []).map((v) => ({ key: v.key, count: v.count }))));
+
   modalBackdrop.classList.add("open");
 }
 

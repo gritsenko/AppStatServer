@@ -4,6 +4,7 @@ using System.Text;
 using AppStatServer;
 using AppStatServer.Auth;
 using AppStatServer.Sentry;
+using AppStatServer.Tracking;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -136,9 +137,15 @@ api.MapGet("/analytics", (IEventStorage es, int? days) =>
 api.MapGet("/event-groups", (IEventStorage es, string? release, string? os) => es.GetEventGroupsAsync(false, release, os));
 api.MapGet("/crash-groups", (IEventStorage es, string? release, string? os) => es.GetEventGroupsAsync(true, release, os));
 api.MapGet("/facets", (IEventStorage es) => es.GetFacetsAsync());
+api.MapGet("/track-events", (IEventStorage es) => es.GetRecentTrackEventsAsync());
+api.MapGet("/events-report", (IEventStorage es, int? days) =>
+    es.GetEventReportAsync(days is >= 1 and <= 90 ? days.Value : 30));
 
 // --- Ingest (anonymous: SDKs authenticate with their DSN, not the dashboard cookie) ---
 _ = new EnvelopeHandler(app);
+
+// Custom product-analytics events (POST /api/track), separate from the Sentry crash/error path.
+_ = new TrackEventHandler(app);
 
 app.Run();
 
