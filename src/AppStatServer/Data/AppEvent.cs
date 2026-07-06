@@ -20,5 +20,6 @@ public class AppEvent
     public string? SpanId { get; set; }
     public string? TraceId { get; set; }
     public string? Os { get; set; }
+    public string? DeviceModel { get; set; }
     public string UserId { get; set; } = string.Empty;
 }

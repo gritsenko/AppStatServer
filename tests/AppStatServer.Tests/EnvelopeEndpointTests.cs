@@ -31,24 +31,39 @@ public class EnvelopeEndpointTests
         // One in-memory db per factory => per-test isolation.
         var db = new LiteDatabase(new MemoryStream());
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            // Deterministic dashboard credentials for the test host.
+            builder.UseSetting("Auth:Username", "tester");
+            builder.UseSetting("Auth:Password", "test-pass");
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IEventStorage>();
                 services.AddSingleton<IEventStorage>(_ => new LiteDbEventStorage(db));
-            }));
+            });
+        });
+    }
+
+    // The read API is behind cookie auth; sign in so subsequent GETs are authorized.
+    // CreateClient() keeps a cookie container, so the auth cookie sticks to the client.
+    private static async Task<HttpClient> CreateAuthedClientAsync(WebApplicationFactory<Program> factory)
+    {
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/login", new { username = "tester", password = "test-pass" });
+        login.EnsureSuccessStatusCode();
+        return client;
     }
 
     [Test]
     public async Task Posting_gzipped_event_envelope_persists_and_exposes_event()
     {
         await using var factory = CreateFactory();
-        using var client = factory.CreateClient();
+        using var client = await CreateAuthedClientAsync(factory);
 
         var response = await client.PostAsync("/api/1/envelope", GzipEnvelope(EventEnvelope));
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
-        var events = await client.GetFromJsonAsync<List<AppEvent>>("/events");
+        var events = await client.GetFromJsonAsync<List<AppEvent>>("/api/events");
 
         await Assert.That(events).IsNotNull();
         await Assert.That(events!.Count).IsEqualTo(1);
@@ -65,7 +80,7 @@ public class EnvelopeEndpointTests
     public async Task Posting_uncompressed_session_envelope_persists_session()
     {
         await using var factory = CreateFactory();
-        using var client = factory.CreateClient();
+        using var client = await CreateAuthedClientAsync(factory);
 
         // No Content-Encoding header => the handler must read the body as-is.
         using var content = new StringContent(SessionEnvelope, Encoding.UTF8);
@@ -73,7 +88,7 @@ public class EnvelopeEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
-        var sessions = await client.GetFromJsonAsync<List<AppSession>>("/sessions");
+        var sessions = await client.GetFromJsonAsync<List<AppSession>>("/api/sessions");
 
         await Assert.That(sessions).IsNotNull();
         await Assert.That(sessions!.Count).IsEqualTo(1);

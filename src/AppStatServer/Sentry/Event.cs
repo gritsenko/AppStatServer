@@ -97,6 +97,11 @@ public class Device
     public string? timezone { get; set; }
     public string? timezone_display_name { get; set; }
     public DateTime boot_time { get; set; }
+    public string? model { get; set; }
+    public string? model_id { get; set; }
+    public string? family { get; set; }
+    public string? brand { get; set; }
+    public string? name { get; set; }
 }
 
 public class Os

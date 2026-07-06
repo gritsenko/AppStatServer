@@ -10,4 +10,14 @@ public interface IEventStorage
 
     Task SaveSessionsAsync(IEnumerable<AppSession> sessions);
     Task<ImmutableList<AppSession>> GetRecentSessionsAsync();
+
+    Task<DashboardStats> GetStatsAsync();
+
+    Task<AnalyticsData> GetAnalyticsAsync(int days);
+
+    // crashesOnly=true groups only crashes; false groups all non-crash events.
+    // Optional release/os narrow the events before grouping.
+    Task<ImmutableList<EventGroup>> GetEventGroupsAsync(bool crashesOnly, string? release = null, string? os = null);
+
+    Task<Facets> GetFacetsAsync();
 }

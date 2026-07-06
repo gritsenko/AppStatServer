@@ -8,7 +8,7 @@ public class EnvelopeParserTests
     private const string EventEnvelope =
         """{"sdk":{"name":"sentry.dotnet","version":"4.13.0"},"event_id":"abc123","sent_at":"2024-04-18T20:00:01Z"}""" + "\n" +
         """{"type":"event","length":42}""" + "\n" +
-        """{"event_id":"abc123","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"myapp@1.2.3","exception":{"values":[{"type":"System.Exception","value":"boom"}]},"threads":{"values":[{"id":1,"crashed":true,"stacktrace":{"frames":[{"function":"Outer","filename":"Outer.cs","lineno":5,"in_app":true},{"function":"Inner","filename":"Inner.cs","lineno":10,"in_app":true}]}}]},"contexts":{"trace":{"span_id":"span1","trace_id":"trace1"},"os":{"raw_description":"Windows 11"}},"user":{"id":"user-1"}}""";
+        """{"event_id":"abc123","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"myapp@1.2.3","exception":{"values":[{"type":"System.Exception","value":"boom"}]},"threads":{"values":[{"id":1,"crashed":true,"stacktrace":{"frames":[{"function":"Outer","filename":"Outer.cs","lineno":5,"in_app":true},{"function":"Inner","filename":"Inner.cs","lineno":10,"in_app":true}]}}]},"contexts":{"trace":{"span_id":"span1","trace_id":"trace1"},"os":{"raw_description":"Windows 11"},"device":{"model":"iPhone14,2","family":"iPhone"}},"user":{"id":"user-1"}}""";
 
     private const string SessionEnvelope =
         """{"sid":"session-1","did":"device-1","init":true,"started":"2024-04-18T20:00:00Z","timestamp":"2024-04-18T20:05:00Z","seq":2,"duration":300,"errors":1,"attrs":{"release":"myapp@1.2.3","environment":"production"}}""";
@@ -30,6 +30,7 @@ public class EnvelopeParserTests
         await Assert.That(ev.TraceId).IsEqualTo("trace1");
         await Assert.That(ev.SpanId).IsEqualTo("span1");
         await Assert.That(ev.Os).IsEqualTo("Windows 11");
+        await Assert.That(ev.DeviceModel).IsEqualTo("iPhone14,2");
         await Assert.That(ev.UserId).IsEqualTo("user-1");
         await Assert.That(parsed.LastId).IsEqualTo("abc123");
     }

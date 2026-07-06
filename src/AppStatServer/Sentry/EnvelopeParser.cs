@@ -91,6 +91,8 @@ public static partial class EnvelopeParser
             SpanId = eventEntry.contexts?.trace?.span_id,
             TraceId = eventEntry.contexts?.trace?.trace_id,
             Os = eventEntry.contexts?.os?.raw_description,
+            DeviceModel = eventEntry.contexts?.device?.model
+                          ?? eventEntry.contexts?.device?.family,
             UserId = eventEntry.user?.id ?? Guid.Empty.ToString(),
         };
     }
