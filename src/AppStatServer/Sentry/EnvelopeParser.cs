@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using AppStatServerLite.Data;
+using AppStatServer.Data;
 
-namespace AppStatServerLite.Sentry;
+namespace AppStatServer.Sentry;
 
 public class ParsedEnvelope
 {

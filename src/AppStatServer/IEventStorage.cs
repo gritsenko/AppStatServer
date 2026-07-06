@@ -1,7 +1,7 @@
-using AppStatServerLite.Data;
+using AppStatServer.Data;
 using System.Collections.Immutable;
 
-namespace AppStatServerLite;
+namespace AppStatServer;
 
 public interface IEventStorage
 {

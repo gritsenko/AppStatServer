@@ -1,4 +1,4 @@
-namespace AppStatServerLite.Data;
+namespace AppStatServer.Data;
 
 public class AppSession
 {

@@ -1,4 +1,4 @@
-namespace AppStatServerLite.Sentry;
+namespace AppStatServer.Sentry;
 
 // These are deserialization DTOs for the Sentry envelope wire format.
 // Any field can legitimately be absent in a given payload, so reference-type

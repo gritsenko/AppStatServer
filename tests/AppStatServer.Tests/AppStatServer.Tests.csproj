@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\AppStatServerLite\AppStatServerLite.csproj" />
+    <ProjectReference Include="..\..\src\AppStatServer\AppStatServer.csproj" />
   </ItemGroup>
 
 </Project>

@@ -3,9 +3,9 @@
     <Project Path="samples/ConsoleTestClient/ConsoleTestClient.csproj" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/AppStatServerLite/AppStatServerLite.csproj" />
+    <Project Path="src/AppStatServer/AppStatServer.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/AppStatServerLite.Tests/AppStatServerLite.Tests.csproj" />
+    <Project Path="tests/AppStatServer.Tests/AppStatServer.Tests.csproj" />
   </Folder>
 </Solution>

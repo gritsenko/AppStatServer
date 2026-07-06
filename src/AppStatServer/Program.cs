@@ -1,5 +1,5 @@
-using AppStatServerLite;
-using AppStatServerLite.Sentry;
+using AppStatServer;
+using AppStatServer.Sentry;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 

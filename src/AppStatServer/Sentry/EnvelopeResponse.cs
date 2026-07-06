@@ -1,4 +1,4 @@
-namespace AppStatServerLite.Sentry;
+namespace AppStatServer.Sentry;
 
 public class EnvelopeResponse
 {

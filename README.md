@@ -35,8 +35,8 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
 
 ```
 AppStatServer.slnx              # solution (slnx format)
-src/AppStatServerLite/          # the server
-tests/AppStatServerLite.Tests/  # TUnit tests
+src/AppStatServer/          # the server
+tests/AppStatServer.Tests/  # TUnit tests
 samples/ConsoleTestClient/      # console app that emits Sentry events for manual testing
 ```
 
@@ -47,7 +47,7 @@ samples/ConsoleTestClient/      # console app that emits Sentry events for manua
 dotnet build AppStatServer.slnx
 
 # run the server (listens on http://localhost:5012)
-dotnet run --project src/AppStatServerLite
+dotnet run --project src/AppStatServer
 
 # run the tests (Microsoft.Testing.Platform mode, enabled via global.json)
 dotnet test --solution AppStatServer.slnx

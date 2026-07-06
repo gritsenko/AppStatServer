@@ -1,6 +1,6 @@
-using AppStatServerLite.Sentry;
+using AppStatServer.Sentry;
 
-namespace AppStatServerLite.Tests;
+namespace AppStatServer.Tests;
 
 public class EnvelopeParserTests
 {

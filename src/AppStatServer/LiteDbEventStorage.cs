@@ -1,8 +1,8 @@
 using System.Collections.Immutable;
-using AppStatServerLite.Data;
+using AppStatServer.Data;
 using LiteDB;
 
-namespace AppStatServerLite;
+namespace AppStatServer;
 
 public class LiteDbEventStorage : IEventStorage, IDisposable
 {

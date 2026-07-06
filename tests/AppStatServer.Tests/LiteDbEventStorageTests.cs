@@ -1,8 +1,8 @@
-using AppStatServerLite;
-using AppStatServerLite.Data;
+using AppStatServer;
+using AppStatServer.Data;
 using LiteDB;
 
-namespace AppStatServerLite.Tests;
+namespace AppStatServer.Tests;
 
 public class LiteDbEventStorageTests
 {

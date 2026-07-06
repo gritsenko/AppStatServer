@@ -1,6 +1,6 @@
 using System.IO.Compression;
 
-namespace AppStatServerLite.Sentry;
+namespace AppStatServer.Sentry;
 
 public class EnvelopeHandler
 {
