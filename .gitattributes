@@ -1,0 +1,4 @@
+# Keep shell scripts LF-only. With core.autocrlf=true, Git would otherwise check them
+# out as CRLF on Windows, and the trailing \r breaks bash heredoc terminators and
+# `set -euo pipefail` when deploy.sh is run through Git Bash.
+*.sh text eol=lf
