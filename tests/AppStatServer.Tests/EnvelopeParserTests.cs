@@ -63,7 +63,8 @@ public class EnvelopeParserTests
         await Assert.That(session.Seq).IsEqualTo(2);
         await Assert.That(session.Duration).IsEqualTo(300);
         await Assert.That(session.Errors).IsEqualTo(1);
-        await Assert.That(session.Release).IsEqualTo("myapp@1.2.3");
+        // Session releases get the same "app@1.2.3" -> "1.2.3" normalisation as events.
+        await Assert.That(session.Release).IsEqualTo("1.2.3");
         await Assert.That(session.Environment).IsEqualTo("production");
     }
 

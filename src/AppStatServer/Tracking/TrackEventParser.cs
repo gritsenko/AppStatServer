@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AppStatServer.Data;
+using AppStatServer.Sentry;
 
 namespace AppStatServer.Tracking;
 
@@ -58,7 +59,9 @@ public static class TrackEventParser
                 Timestamp = entry.Timestamp?.ToLocalTime() ?? DateTime.Now,
                 UserId = batch.UserId ?? string.Empty,
                 SessionId = batch.SessionId ?? string.Empty,
-                Release = batch.Release ?? string.Empty,
+                // Same normalisation as Sentry events ("myapp@1.2.3" -> "1.2.3"), so release
+                // breakdowns that mix both signals don't split into duplicate buckets.
+                Release = EnvelopeParser.ExtractVersion(batch.Release),
                 Os = batch.Os,
                 Properties = NormalizeProperties(entry.Properties),
             });

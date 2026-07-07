@@ -81,6 +81,56 @@ public class LiteDbEventStorageTests
     }
 
     [Test]
+    public async Task Stats_report_rolling_health_windows()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", Level = "info", Timestamp = now },
+            new AppEvent { Id = "e2", Level = "error", IsError = true, Timestamp = now.AddDays(-1) },
+            new AppEvent { Id = "e3", Level = "fatal", IsError = true, IsCrash = true, Timestamp = now.AddDays(-2) },
+            // Previous 7-day window (8-9 days ago) — the trend baseline.
+            new AppEvent { Id = "e4", Level = "error", IsError = true, Timestamp = now.AddDays(-8) },
+            new AppEvent { Id = "e5", Level = "fatal", IsError = true, IsCrash = true, Timestamp = now.AddDays(-8) },
+            new AppEvent { Id = "e6", Level = "fatal", IsError = true, IsCrash = true, Timestamp = now.AddDays(-9) },
+            // Far outside both windows.
+            new AppEvent { Id = "e7", Level = "error", IsError = true, Timestamp = now.AddDays(-30) },
+        ]);
+        await storage.SaveSessionsAsync(
+        [
+            new AppSession { Id = "s1", Started = now.AddDays(-1), Errors = 0 },
+            new AppSession { Id = "s2", Started = now.AddDays(-2), Errors = 0 },
+            new AppSession { Id = "s3", Started = now.AddDays(-3), Errors = 2 },
+            new AppSession { Id = "s4", Started = now.AddDays(-20), Errors = 5 }, // outside the window
+        ]);
+
+        var stats = await storage.GetStatsAsync();
+
+        await Assert.That(stats.EventsToday).IsEqualTo(1);
+        await Assert.That(stats.ErrorsLast7Days).IsEqualTo(2);
+        await Assert.That(stats.ErrorsPrev7Days).IsEqualTo(3);
+        await Assert.That(stats.CrashesLast7Days).IsEqualTo(1);
+        await Assert.That(stats.CrashesPrev7Days).IsEqualTo(2);
+        await Assert.That(stats.SessionsLast7Days).IsEqualTo(3);
+        await Assert.That(Math.Round(stats.CrashFreeSessionsPct!.Value, 1)).IsEqualTo(66.7);
+    }
+
+    [Test]
+    public async Task Stats_crash_free_pct_is_null_without_recent_sessions()
+    {
+        using var storage = NewInMemoryStorage();
+
+        await storage.SaveSessionsAsync([new AppSession { Id = "s1", Started = DateTime.Now.AddDays(-20), Errors = 0 }]);
+
+        var stats = await storage.GetStatsAsync();
+
+        await Assert.That(stats.SessionsLast7Days).IsEqualTo(0);
+        await Assert.That(stats.CrashFreeSessionsPct).IsNull();
+    }
+
+    [Test]
     public async Task Stats_count_custom_events_separately_from_sentry_events()
     {
         using var storage = NewInMemoryStorage();

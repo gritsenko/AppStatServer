@@ -64,7 +64,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         return Task.FromResult(result.ToImmutableList());
     }
 
-    public Task<EventReport> GetEventReportAsync(int days)
+    public Task<EventReport> GetEventReportAsync(int days, string? release = null, string? os = null)
     {
         var col = _db.GetCollection<TrackEvent>("trackevents");
 
@@ -73,7 +73,20 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         var start = today.AddDays(-(days - 1));
         var dayList = Enumerable.Range(0, days).Select(i => start.AddDays(i)).ToList();
 
-        var all = col.Find(e => e.Timestamp >= start).ToList();
+        var windowed = col.Find(e => e.Timestamp >= start).ToList();
+
+        // Filter facets are computed over the whole window (before release/os narrowing),
+        // so selecting one value doesn't collapse the other dropdown's options.
+        var releases = windowed.Where(e => !string.IsNullOrEmpty(e.Release))
+            .Select(e => e.Release).Distinct().OrderBy(x => x).ToList();
+        var oses = windowed.Where(e => !string.IsNullOrEmpty(e.Os))
+            .Select(e => e.Os!).Distinct().OrderBy(x => x).ToList();
+
+        var all = windowed;
+        if (!string.IsNullOrEmpty(release))
+            all = all.Where(e => e.Release == release).ToList();
+        if (!string.IsNullOrEmpty(os))
+            all = all.Where(e => e.Os == os).ToList();
 
         var perName = all
             .GroupBy(e => e.Name)
@@ -101,6 +114,8 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 Count = all.Count(e => e.Timestamp.Date == d),
             }).ToList(),
             Events = perName,
+            Releases = releases,
+            Oses = oses,
         };
 
         return Task.FromResult(report);
@@ -148,6 +163,12 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         // proof-of-concept data volumes this server is expected to hold.
         var all = events.FindAll().ToList();
 
+        // Same local-time anchoring as GetAnalyticsAsync (LiteDB returns local DateTimes).
+        var today = DateTime.Now.Date;
+        var last7 = today.AddDays(-6);
+        var prev7 = today.AddDays(-13);
+        var recentSessions = sessions.Find(s => s.Started >= last7).ToList();
+
         var stats = new DashboardStats
         {
             TotalEvents = all.Count,
@@ -155,6 +176,15 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             Crashes = all.Count(e => e.IsCrash),
             TotalSessions = sessions.Count(),
             CustomEvents = trackEvents.Count(),
+            EventsToday = all.Count(e => e.Timestamp >= today),
+            ErrorsLast7Days = all.Count(e => e.IsError && e.Timestamp >= last7),
+            ErrorsPrev7Days = all.Count(e => e.IsError && e.Timestamp >= prev7 && e.Timestamp < last7),
+            CrashesLast7Days = all.Count(e => e.IsCrash && e.Timestamp >= last7),
+            CrashesPrev7Days = all.Count(e => e.IsCrash && e.Timestamp >= prev7 && e.Timestamp < last7),
+            SessionsLast7Days = recentSessions.Count,
+            CrashFreeSessionsPct = recentSessions.Count > 0
+                ? 100.0 * recentSessions.Count(s => s.Errors == 0) / recentSessions.Count
+                : null,
             EventsByLevel = all
                 .GroupBy(e => string.IsNullOrEmpty(e.Level) ? "-" : e.Level)
                 .Select(g => new CountByKey { Key = g.Key, Count = g.Count() })

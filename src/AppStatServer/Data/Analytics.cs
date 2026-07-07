@@ -63,6 +63,11 @@ public class EventReport
     public int Users { get; set; }           // distinct users across all events in the window
     public List<DailyCount> EventsPerDay { get; set; } = [];
     public List<EventStat> Events { get; set; } = []; // one row per event name, most frequent first
+
+    // Distinct values available for the platform / version filters, taken over the whole
+    // window (before the current release/os filter) so the dropdowns stay stable.
+    public List<string> Releases { get; set; } = [];
+    public List<string> Oses { get; set; } = [];
 }
 
 // One event name rolled up: how often, by how many users, and its property value distribution.

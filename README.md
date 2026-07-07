@@ -6,7 +6,9 @@ and sessions and stores them.
 
 Inspired by the [glitchtip.com](https://glitchtip.com) project.
 
-> Current status: proof of concept.
+> Current status: proof of concept. Testing on production.
+
+![alt](docs/screenshot.png)
 
 ## What it does
 

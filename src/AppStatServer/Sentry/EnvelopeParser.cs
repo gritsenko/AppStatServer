@@ -116,12 +116,14 @@ public static partial class EnvelopeParser
             Duration = session.duration,
             Errors = session.errors,
             Init = session.init,
-            Release = session.attrs?.release ?? string.Empty,
+            Release = ExtractVersion(session.attrs?.release),
             Environment = session.attrs?.environment ?? string.Empty,
         };
     }
 
-    private static string ExtractVersion(string? release)
+    // Shared with TrackEventParser so every ingest path stores the same "1.2.3" form and
+    // release breakdowns don't split into "myapp@1.2.3" vs "1.2.3" buckets.
+    public static string ExtractVersion(string? release)
     {
         if (string.IsNullOrWhiteSpace(release))
             return string.Empty;

@@ -175,6 +175,51 @@ input:focus, select:focus { border-color: var(--accent); }
 .page-head h1 { margin: 0; font-size: 20px; }
 .page-sub { color: var(--muted); font-size: 13px; }
 
+.section-title {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+/* Compact DSN chip shown once the server has data (the full panel is onboarding-only). */
+.dsn-chip {
+  margin-left: auto;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 4px 4px 12px;
+}
+.dsn-chip-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.dsn-chip code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-2);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+.dsn-chip button { padding: 4px 10px; font-size: 12px; }
+.dsn-chip button.copied {
+  background: var(--good);
+  border-color: var(--good);
+  color: #fff;
+}
+
 .container { padding: 22px 24px 60px; max-width: 1280px; margin: 0 auto; }
 
 /* ---------- DSN panel ---------- */
@@ -257,6 +302,15 @@ input:focus, select:focus { border-color: var(--accent); }
 .card.custom-events::before { background: var(--series-2); }
 .card.sessions::before { background: var(--good); }
 
+.kpi-sub { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.trend.good { color: var(--good); }
+.trend.bad { color: var(--critical); }
+.trend.flat { color: var(--muted); }
+.pct-good { color: var(--good); }
+.pct-warn { color: var(--warning); }
+.pct-bad { color: var(--critical); }
+.value-muted { color: var(--muted); }
+
 /* ---------- Panels / charts ---------- */
 .panels {
   display: grid;
@@ -324,6 +378,27 @@ input:focus, select:focus { border-color: var(--accent); }
 /* Analytics tiles */
 .cards.tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .panel.wide { margin-bottom: 18px; }
+
+/* ---------- Top issues (overview) ---------- */
+.issues { display: flex; flex-direction: column; }
+.issue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 6px;
+  margin: 0 -6px;
+  border-radius: 8px;
+  border-bottom: 1px solid var(--grid);
+  cursor: pointer;
+}
+.issue-row:last-child { border-bottom: none; }
+.issue-row:hover { background: var(--surface-2); }
+.issue-row .badge { margin-top: 2px; }
+.issue-main { flex: 1; min-width: 0; }
+.issue-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.issue-meta { color: var(--muted); font-size: 12px; }
+.panel-foot { display: flex; gap: 16px; margin-top: 12px; font-size: 13px; }
+.panel-foot a { text-decoration: none; font-weight: 550; }
 
 /* ---------- Level badges ---------- */
 .badge {
