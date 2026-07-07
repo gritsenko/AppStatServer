@@ -50,7 +50,9 @@ public static partial class EnvelopeParser
         if (entry.StartsWith("{\"sid"))
         {
             var session = JsonSerializer.Deserialize<SessionEntry>(entry);
-            if (session?.sid != null)
+            // The sid is the session's primary key (sessions are upserted by it). A missing
+            // or blank sid can't be a key — and would blow up on persist — so drop it.
+            if (session is not null && !string.IsNullOrWhiteSpace(session.sid))
                 result.Sessions.Add(MapSession(session));
             return;
         }
@@ -67,8 +69,11 @@ public static partial class EnvelopeParser
             if (string.IsNullOrWhiteSpace(message))
                 return;
 
-            result.Events.Add(MapEvent(eventEntry, entry, message));
-            result.LastId = eventEntry.event_id ?? result.LastId;
+            var mapped = MapEvent(eventEntry, entry, message);
+            result.Events.Add(mapped);
+            // Echo back the event id; if the payload omitted one we fall back to the
+            // generated id we just stored, never an empty string.
+            result.LastId = mapped.Id;
         }
 
         // Envelope header ({"sdk...) and section markers ({"type...) carry no payload we persist.
@@ -78,7 +83,9 @@ public static partial class EnvelopeParser
     {
         return new AppEvent
         {
-            Id = eventEntry.event_id ?? Guid.NewGuid().ToString(),
+            // A blank id (not just null) must not reach storage: LiteDB tries to auto-generate
+            // an ObjectId for an empty string _id and then fails casting it back to string.
+            Id = string.IsNullOrWhiteSpace(eventEntry.event_id) ? Guid.NewGuid().ToString() : eventEntry.event_id,
             Timestamp = eventEntry.timestamp,
             SessionId = string.Empty,
             Message = message,

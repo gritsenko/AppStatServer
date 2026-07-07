@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="AppStatServer">
+  <defs>
+    <linearGradient id="badge" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a78d6"/>
+      <stop offset="1" stop-color="#1baf7a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded gradient badge (accent blue -> series-2 teal, matching the app palette) -->
+  <rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#badge)"/>
+  <!-- Soft top gloss for depth -->
+  <rect x="1" y="1" width="30" height="14" rx="7.5" fill="#ffffff" opacity="0.10"/>
+
+  <!-- Ascending bar chart: graduated opacity gives the bars depth -->
+  <g fill="#ffffff">
+    <rect x="6.5"  y="18" width="5" height="8"  rx="1.6" opacity="0.72"/>
+    <rect x="13.5" y="13" width="5" height="13" rx="1.6" opacity="0.86"/>
+    <rect x="20.5" y="8"  width="5" height="18" rx="1.6"/>
+  </g>
+
+  <!-- Live "peak" data point on the tallest bar -->
+  <circle cx="23" cy="8" r="3.2" fill="#ffffff" opacity="0.22"/>
+  <circle cx="23" cy="8" r="2"   fill="#fab219"/>
+</svg>

@@ -96,6 +96,30 @@ public class EnvelopeEndpointTests
         await Assert.That(sessions[0].Environment).IsEqualTo("production");
     }
 
+    [Test]
+    public async Task Posting_event_with_blank_event_id_persists_without_500()
+    {
+        // Regression: a blank event_id used to reach LiteDB as an empty string _id, which it
+        // tried to auto-generate an ObjectId for and then threw casting back to string (HTTP 500).
+        const string blankIdEnvelope =
+            """{"sdk":{"name":"sentry.dotnet","version":"4.13.0"},"event_id":"","sent_at":"2024-04-18T20:00:01Z"}""" + "\n" +
+            """{"type":"event"}""" + "\n" +
+            """{"event_id":"","timestamp":"2024-04-18T20:00:00Z","level":"info","logentry":{"message":"blank id"}}""";
+
+        await using var factory = CreateFactory();
+        using var client = await CreateAuthedClientAsync(factory);
+
+        using var content = new StringContent(blankIdEnvelope, Encoding.UTF8);
+        var response = await client.PostAsync("/api/1/envelope", content);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        var events = await client.GetFromJsonAsync<List<AppEvent>>("/api/events");
+        await Assert.That(events!.Count).IsEqualTo(1);
+        await Assert.That(events[0].Id).IsNotEmpty();
+        await Assert.That(events[0].Message).IsEqualTo("blank id");
+    }
+
     private static ByteArrayContent GzipEnvelope(string body)
     {
         var bytes = Encoding.UTF8.GetBytes(body);

@@ -81,6 +81,59 @@ public class LiteDbEventStorageTests
     }
 
     [Test]
+    public async Task Stats_count_custom_events_separately_from_sentry_events()
+    {
+        using var storage = NewInMemoryStorage();
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", Level = "info", Timestamp = new DateTime(2024, 4, 18) },
+            new AppEvent { Id = "e2", Level = "error", IsError = true, Timestamp = new DateTime(2024, 4, 18) },
+        ]);
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "level_start", UserId = "u1", Timestamp = new DateTime(2024, 4, 18) },
+            new TrackEvent { Id = "t2", Name = "purchase", UserId = "u2", Timestamp = new DateTime(2024, 4, 18) },
+            new TrackEvent { Id = "t3", Name = "level_start", UserId = "u1", Timestamp = new DateTime(2024, 4, 19) },
+        ]);
+
+        var stats = await storage.GetStatsAsync();
+
+        await Assert.That(stats.TotalEvents).IsEqualTo(2);   // Sentry events only
+        await Assert.That(stats.CustomEvents).IsEqualTo(3);  // track events, counted apart
+    }
+
+    [Test]
+    public async Task Analytics_count_track_only_users_as_active_and_new()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        // u1 exists only via a Sentry event; u2 exists only via a custom track event.
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", UserId = "u1", Level = "info", Release = "1.0.0", Os = "Android 13", DeviceModel = "Pixel 7", Timestamp = now },
+        ]);
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "purchase", UserId = "u2", Release = "1.0.1", Os = "iOS 17", Timestamp = now },
+        ]);
+
+        var a = await storage.GetAnalyticsAsync(30);
+
+        // Both users are active/new even though u2 never sent a Sentry event.
+        await Assert.That(a.Mau).IsEqualTo(2);
+        await Assert.That(a.Dau).IsEqualTo(2);
+        await Assert.That(a.NewUsers).IsEqualTo(2);
+        // Version/OS distributions span both signals...
+        await Assert.That(a.VersionDistribution.Single(v => v.Key == "1.0.1").Count).IsEqualTo(1);
+        await Assert.That(a.OsDistribution.Single(o => o.Key == "iOS 17").Count).IsEqualTo(1);
+        // ...but device distribution stays Sentry-only (track events carry no device model).
+        await Assert.That(a.DeviceDistribution.Count).IsEqualTo(1);
+        await Assert.That(a.DeviceDistribution.Single(d => d.Key == "Pixel 7").Count).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Analytics_computes_users_sessions_and_distributions()
     {
         using var storage = NewInMemoryStorage();

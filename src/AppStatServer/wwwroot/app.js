@@ -28,6 +28,7 @@ const views = {
   events: renderEvents,
   logs: renderLogs,
   crashes: renderCrashes,
+  maintenance: renderMaintenance,
 };
 
 function currentRoute() {
@@ -80,10 +81,11 @@ async function renderOverview() {
         <button id="dsn-copy" class="primary" type="button">Copy</button>
       </div>
     </section>
-    <section class="cards">
+    <section class="cards tiles">
       ${statTile("Events", stats.totalEvents)}
       ${statTile("Errors", stats.errors, "errors")}
       ${statTile("Crashes", stats.crashes, "crashes")}
+      ${statTile("Custom events", stats.customEvents, "custom-events")}
       ${statTile("Sessions", stats.totalSessions, "sessions")}
     </section>
     <section class="panels">
@@ -463,6 +465,232 @@ async function renderGroupsPage(cfg) {
       tr.addEventListener("click", () => openEventModal(rows[Number(tr.dataset.i)].sample, rows[Number(tr.dataset.i)]));
     });
   }
+}
+
+// ---------- Maintenance (self-test: post synthetic data to the live ingest endpoints) ----------
+const MAINT_RELEASE = "appstatserver-maintenance@1.0.0";
+const maintLog = []; // in-memory activity log, newest first; survives navigation within the session
+
+let _maintUser;
+// One stable user id per page load, so repeated test sends group under a single user.
+function maintUserId() {
+  if (!_maintUser) _maintUser = uuid();
+  return _maintUser;
+}
+
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+// Sentry event ids are 32 hex chars (a UUID without the dashes).
+function hexId() {
+  return uuid().replace(/-/g, "");
+}
+
+function postRaw(url, body, contentType) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": contentType, Accept: "application/json" },
+    body,
+  });
+}
+
+// A newline-delimited Sentry envelope: header line, item header, item payload.
+// The event object is built with event_id first so the server's line-prefix check matches.
+function buildEventEnvelope(ev) {
+  const header = { sdk: { name: "appstatserver.maintenance", version: "1.0.0" }, event_id: ev.event_id, sent_at: new Date().toISOString() };
+  return JSON.stringify(header) + "\n" + JSON.stringify({ type: "event" }) + "\n" + JSON.stringify(ev);
+}
+
+async function renderMaintenance() {
+  view.innerHTML = `
+    <div class="page-head">
+      <h1>Maintenance</h1>
+      <span class="page-sub">Send synthetic data to the live ingest endpoints and verify it lands</span>
+    </div>
+    <section class="dsn-panel">
+      <div class="dsn-info">
+        <span class="dsn-label">Self-test</span>
+        <p class="dsn-hint">These buttons POST to the real anonymous ingest endpoints (<code>/api/1/envelope</code>, <code>/api/track</code>) exactly like a client SDK would, then let you confirm the data was written. Test records use release <code>${escapeHtml(MAINT_RELEASE)}</code> and are saved to the live database.</p>
+      </div>
+    </section>
+    <section class="maint-grid">
+      <div class="maint-card">
+        <h2>Test log event</h2>
+        <p class="maint-desc">A non-crash Sentry event → <code>/api/1/envelope</code>. Appears under Logs &amp; Overview.</p>
+        <div class="maint-controls">
+          <select id="maint-level">
+            <option value="info">info</option>
+            <option value="warning">warning</option>
+            <option value="error">error</option>
+            <option value="fatal">fatal</option>
+          </select>
+          <input id="maint-msg" type="text" placeholder="Custom message (optional)" />
+        </div>
+        <button class="primary" data-action="event">Send event</button>
+      </div>
+      <div class="maint-card">
+        <h2>Test crash</h2>
+        <p class="maint-desc">An exception with a crashed thread &amp; stack trace → <code>/api/1/envelope</code>. Appears under Crashes.</p>
+        <button class="primary" data-action="crash">Send crash</button>
+      </div>
+      <div class="maint-card">
+        <h2>Test session</h2>
+        <p class="maint-desc">A session record → <code>/api/1/envelope</code>. Appears under Overview → Sessions.</p>
+        <button class="primary" data-action="session">Send session</button>
+      </div>
+      <div class="maint-card">
+        <h2>Test custom event</h2>
+        <p class="maint-desc">A product-analytics event → <code>/api/track</code>. Appears under Events.</p>
+        <button class="primary" data-action="track">Send track event</button>
+      </div>
+    </section>
+    <section class="panel wide">
+      <h2>Activity log</h2>
+      <div class="maint-log" id="maint-log"></div>
+    </section>`;
+
+  view.querySelectorAll(".maint-card button[data-action]").forEach((btn) => {
+    btn.addEventListener("click", () => maintSend(btn.dataset.action, btn));
+  });
+
+  drawMaintLog();
+}
+
+async function maintSend(action, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+
+  try {
+    let res, kind, route, detail;
+    const now = Date.now();
+
+    if (action === "event") {
+      const level = document.getElementById("maint-level").value;
+      const msg = document.getElementById("maint-msg").value.trim() || `Test ${level} event from maintenance page`;
+      const eventId = hexId();
+      res = await postRaw("/api/1/envelope", buildEventEnvelope({
+        event_id: eventId,
+        timestamp: new Date(now).toISOString(),
+        level,
+        release: MAINT_RELEASE,
+        logentry: { message: msg },
+        contexts: { os: { raw_description: navigator.userAgent } },
+        user: { id: maintUserId() },
+      }), "application/x-sentry-envelope");
+      kind = "log event";
+      route = "logs";
+      detail = `${level} · id ${shortId(eventId)}`;
+    } else if (action === "crash") {
+      const eventId = hexId();
+      res = await postRaw("/api/1/envelope", buildEventEnvelope({
+        event_id: eventId,
+        timestamp: new Date(now).toISOString(),
+        level: "fatal",
+        release: MAINT_RELEASE,
+        exception: { values: [{ type: "AppStatServer.MaintenanceTestException", value: "Test crash from maintenance page" }] },
+        threads: { values: [{ id: 1, crashed: true, stacktrace: { frames: [
+          { function: "Program.Main", filename: "Program.cs", lineno: 12, in_app: true },
+          { function: "MaintenancePage.TriggerTestCrash", filename: "Maintenance.cs", lineno: 42, in_app: true },
+        ] } }] },
+        contexts: { os: { raw_description: navigator.userAgent } },
+        user: { id: maintUserId() },
+      }), "application/x-sentry-envelope");
+      kind = "crash";
+      route = "crashes";
+      detail = `id ${shortId(eventId)}`;
+    } else if (action === "session") {
+      const sid = uuid();
+      const header = JSON.stringify({ sdk: { name: "appstatserver.maintenance", version: "1.0.0" }, sent_at: new Date(now).toISOString() });
+      const session = {
+        sid,
+        did: maintUserId(),
+        init: true,
+        started: new Date(now - 60000).toISOString(),
+        timestamp: new Date(now).toISOString(),
+        seq: 1,
+        duration: 60,
+        errors: 0,
+        attrs: { release: MAINT_RELEASE, environment: "maintenance" },
+      };
+      res = await postRaw("/api/1/envelope",
+        header + "\n" + JSON.stringify({ type: "session" }) + "\n" + JSON.stringify(session),
+        "application/x-sentry-envelope");
+      kind = "session";
+      route = "overview";
+      detail = `sid ${shortId(sid)}`;
+    } else if (action === "track") {
+      res = await postRaw("/api/track", JSON.stringify({
+        userId: maintUserId(),
+        sessionId: uuid(),
+        release: MAINT_RELEASE,
+        os: navigator.userAgent,
+        events: [{
+          name: "maintenance_test_event",
+          timestamp: new Date(now).toISOString(),
+          properties: { source: "maintenance-page", value: 42, ok: true },
+        }],
+      }), "application/json");
+      kind = "custom event";
+      route = "events";
+      detail = "maintenance_test_event";
+    } else {
+      return;
+    }
+
+    let extra = "";
+    try {
+      const data = await res.json();
+      if (data && typeof data.accepted === "number") extra = `accepted ${data.accepted}`;
+    } catch {
+      // response body is optional / non-JSON — the status code is what matters
+    }
+
+    maintLog.unshift({
+      time: new Date().toISOString(),
+      ok: res.ok,
+      text: `${res.ok ? "Sent" : "Failed to send"} ${kind} — HTTP ${res.status}`,
+      detail: [detail, extra].filter(Boolean).join(" · "),
+      route: res.ok ? route : null,
+    });
+  } catch (e) {
+    maintLog.unshift({ time: new Date().toISOString(), ok: false, text: "Request failed: " + e.message, detail: "", route: null });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    drawMaintLog();
+  }
+}
+
+function drawMaintLog() {
+  const host = document.getElementById("maint-log");
+  if (!host) return;
+  if (!maintLog.length) {
+    host.innerHTML = '<div class="empty">No test requests sent yet.</div>';
+    return;
+  }
+  host.innerHTML = maintLog
+    .map((e) => `
+      <div class="maint-log-row">
+        <span class="badge ${e.ok ? "lvl-info" : "lvl-error"}">${e.ok ? "ok" : "fail"}</span>
+        <span class="maint-log-time mono">${fmtTime(e.time)}</span>
+        <span class="maint-log-text">${escapeHtml(e.text)}${e.detail ? ` <span class="maint-log-detail">${escapeHtml(e.detail)}</span>` : ""}</span>
+        ${e.route ? `<a href="#" class="maint-view" data-route="${escapeHtml(e.route)}">View →</a>` : ""}
+      </div>`)
+    .join("");
+  host.querySelectorAll(".maint-view").forEach((a) => {
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      // Drop the SPA cache so the freshly written test data shows up on the target page.
+      for (const k of Object.keys(cache)) delete cache[k];
+      location.hash = "#/" + a.dataset.route;
+    });
+  });
 }
 
 // ---------- shared bits ----------

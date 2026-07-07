@@ -254,6 +254,7 @@ input:focus, select:focus { border-color: var(--accent); }
 }
 .card.errors::before { background: var(--serious); }
 .card.crashes::before { background: var(--critical); }
+.card.custom-events::before { background: var(--series-2); }
 .card.sessions::before { background: var(--good); }
 
 /* ---------- Panels / charts ---------- */
@@ -461,6 +462,51 @@ pre.stack {
   color: var(--muted);
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
+
+/* ---------- Maintenance ---------- */
+.dsn-hint code,
+.maint-desc code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.maint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.maint-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+}
+.maint-card h2 { margin: 0 0 6px; font-size: 15px; }
+.maint-card .maint-desc { margin: 0 0 14px; flex: 1; color: var(--text-2); font-size: 13px; }
+.maint-controls { display: flex; gap: 8px; margin-bottom: 12px; }
+.maint-controls select { flex: none; }
+.maint-controls input { flex: 1; min-width: 0; }
+.maint-card button { align-self: flex-start; }
+
+.maint-log { display: flex; flex-direction: column; }
+.maint-log-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--grid);
+}
+.maint-log-row:last-child { border-bottom: none; }
+.maint-log-time { color: var(--muted); white-space: nowrap; }
+.maint-log-text { flex: 1; }
+.maint-log-detail { color: var(--muted); }
+.maint-view { text-decoration: none; font-weight: 550; white-space: nowrap; }
 
 @media (max-width: 900px) {
   .cards { grid-template-columns: repeat(2, 1fr); }

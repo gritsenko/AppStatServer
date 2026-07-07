@@ -142,6 +142,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
     {
         var events = _db.GetCollection<AppEvent>("events");
         var sessions = _db.GetCollection<AppSession>("sessions");
+        var trackEvents = _db.GetCollection<TrackEvent>("trackevents");
 
         // Pull events once and compute the breakdowns in memory — fine for the
         // proof-of-concept data volumes this server is expected to hold.
@@ -153,6 +154,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             Errors = all.Count(e => e.IsError),
             Crashes = all.Count(e => e.IsCrash),
             TotalSessions = sessions.Count(),
+            CustomEvents = trackEvents.Count(),
             EventsByLevel = all
                 .GroupBy(e => string.IsNullOrEmpty(e.Level) ? "-" : e.Level)
                 .Select(g => new CountByKey { Key = g.Key, Count = g.Count() })
@@ -176,29 +178,42 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         return Task.FromResult(stats);
     }
 
+    // A minimal per-user activity signal, projected from either an AppEvent (Sentry) or a
+    // TrackEvent (custom product event), so usage analytics reflect real engagement rather
+    // than crashes/errors alone. (Device model is intentionally omitted — track events carry none.)
+    private readonly record struct UserActivity(string UserId, DateTime Timestamp, string Release, string? Os);
+
     public Task<AnalyticsData> GetAnalyticsAsync(int days)
     {
         var events = _db.GetCollection<AppEvent>("events");
         var sessions = _db.GetCollection<AppSession>("sessions");
+        var trackEvents = _db.GetCollection<TrackEvent>("trackevents");
 
         // LiteDB returns DateTimes as local time, so anchor the window on local "now".
         var today = DateTime.Now.Date;
         var start = today.AddDays(-(days - 1));
         var dayList = Enumerable.Range(0, days).Select(i => start.AddDays(i)).ToList();
 
-        var allEvents = events.FindAll().Where(e => !string.IsNullOrEmpty(e.UserId)).ToList();
+        // Any user-attributed signal counts as activity — Sentry events AND custom product
+        // events — so a user who never crashes still registers as active.
+        var appEvents = events.FindAll().ToList();
+        var activity = appEvents
+            .Select(e => new UserActivity(e.UserId, e.Timestamp, e.Release, e.Os))
+            .Concat(trackEvents.FindAll().Select(t => new UserActivity(t.UserId, t.Timestamp, t.Release, t.Os)))
+            .Where(a => !string.IsNullOrEmpty(a.UserId))
+            .ToList();
 
-        // First-ever event per user (across all of history) tells us who is "new" in the window.
-        var firstSeen = allEvents
-            .GroupBy(e => e.UserId)
-            .ToDictionary(g => g.Key, g => g.Min(e => e.Timestamp));
+        // First-ever activity per user (across all of history) tells us who is "new" in the window.
+        var firstSeen = activity
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.Min(a => a.Timestamp));
 
-        var winEvents = allEvents.Where(e => e.Timestamp >= start).ToList();
+        var winActivity = activity.Where(a => a.Timestamp >= start).ToList();
         var winSessions = sessions.Find(s => s.Started >= start).ToList();
 
-        var activeByDay = winEvents
-            .GroupBy(e => e.Timestamp.Date)
-            .ToDictionary(g => g.Key, g => g.Select(e => e.UserId).Distinct().Count());
+        var activeByDay = winActivity
+            .GroupBy(a => a.Timestamp.Date)
+            .ToDictionary(g => g.Key, g => g.Select(a => a.UserId).Distinct().Count());
         var newByDay = firstSeen
             .Where(kv => kv.Value >= start)
             .GroupBy(kv => kv.Value.Date)
@@ -206,12 +221,15 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
 
         var week = today.AddDays(-6);
 
+        // Device model is Sentry-only, so its distribution is computed from AppEvents in-window.
+        var winDeviceEvents = appEvents.Where(e => !string.IsNullOrEmpty(e.UserId) && e.Timestamp >= start).ToList();
+
         var data = new AnalyticsData
         {
             Days = days,
-            Mau = winEvents.Select(e => e.UserId).Distinct().Count(),
-            Wau = winEvents.Where(e => e.Timestamp >= week).Select(e => e.UserId).Distinct().Count(),
-            Dau = winEvents.Where(e => e.Timestamp >= today).Select(e => e.UserId).Distinct().Count(),
+            Mau = winActivity.Select(a => a.UserId).Distinct().Count(),
+            Wau = winActivity.Where(a => a.Timestamp >= week).Select(a => a.UserId).Distinct().Count(),
+            Dau = winActivity.Where(a => a.Timestamp >= today).Select(a => a.UserId).Distinct().Count(),
             NewUsers = firstSeen.Count(kv => kv.Value >= start),
             TotalSessions = winSessions.Count,
             AvgSessionSeconds = winSessions.Count > 0 ? winSessions.Average(s => s.Duration) : 0,
@@ -227,21 +245,21 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 Count = winSessions.Count(s => s.Started.Date == d),
             }).ToList(),
             DurationBuckets = BuildDurationBuckets(winSessions),
-            VersionDistribution = winEvents
-                .Where(e => !string.IsNullOrEmpty(e.Release))
-                .GroupBy(e => e.Release)
-                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(e => e.UserId).Distinct().Count() })
+            VersionDistribution = winActivity
+                .Where(a => !string.IsNullOrEmpty(a.Release))
+                .GroupBy(a => a.Release)
+                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(a => a.UserId).Distinct().Count() })
                 .OrderByDescending(c => c.Count)
                 .Take(10)
                 .ToList(),
-            OsDistribution = winEvents
-                .Where(e => !string.IsNullOrEmpty(e.Os))
-                .GroupBy(e => e.Os!)
-                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(e => e.UserId).Distinct().Count() })
+            OsDistribution = winActivity
+                .Where(a => !string.IsNullOrEmpty(a.Os))
+                .GroupBy(a => a.Os!)
+                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(a => a.UserId).Distinct().Count() })
                 .OrderByDescending(c => c.Count)
                 .Take(10)
                 .ToList(),
-            DeviceDistribution = winEvents
+            DeviceDistribution = winDeviceEvents
                 .Where(e => !string.IsNullOrEmpty(e.DeviceModel))
                 .GroupBy(e => e.DeviceModel!)
                 .Select(g => new CountByKey { Key = g.Key, Count = g.Select(e => e.UserId).Distinct().Count() })

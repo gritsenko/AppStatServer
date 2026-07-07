@@ -8,6 +8,9 @@ public class DashboardStats
     public int Crashes { get; set; }
     public int TotalSessions { get; set; }
 
+    // Custom product (track) events — a separate signal from the Sentry TotalEvents above.
+    public int CustomEvents { get; set; }
+
     public List<CountByKey> EventsByLevel { get; set; } = [];
     public List<CountByKey> EventsByRelease { get; set; } = [];
     public List<DailyCount> EventsPerDay { get; set; } = [];
