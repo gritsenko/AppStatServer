@@ -76,17 +76,23 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         var windowed = col.Find(e => e.Timestamp >= start).ToList();
 
         // Filter facets are computed over the whole window (before release/os narrowing),
-        // so selecting one value doesn't collapse the other dropdown's options.
+        // so selecting one value doesn't collapse the other dropdown's options. The raw OS /
+        // user-agent strings are collapsed into platform buckets (Windows, Android, Web, …)
+        // so the dropdown lists a handful of platforms instead of every distinct OS build.
         var releases = windowed.Where(e => !string.IsNullOrEmpty(e.Release))
             .Select(e => e.Release).Distinct().OrderBy(x => x).ToList();
-        var oses = windowed.Where(e => !string.IsNullOrEmpty(e.Os))
-            .Select(e => e.Os!).Distinct().OrderBy(x => x).ToList();
+        var oses = windowed
+            .GroupBy(e => Platform.Categorize(e.Os))
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .ToList();
 
         var all = windowed;
         if (!string.IsNullOrEmpty(release))
             all = all.Where(e => e.Release == release).ToList();
+        // The `os` filter now carries a platform bucket rather than a raw OS string.
         if (!string.IsNullOrEmpty(os))
-            all = all.Where(e => e.Os == os).ToList();
+            all = all.Where(e => Platform.Categorize(e.Os) == os).ToList();
 
         var perName = all
             .GroupBy(e => e.Name)
@@ -102,6 +108,22 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             .OrderByDescending(s => s.Count)
             .ToList();
 
+        // Tag each event with its platform once, then roll up: which platforms appear (most
+        // events first, to order the stack) and each day's per-platform event counts.
+        var tagged = all.Select(e => (e.Timestamp.Date, Platform: Platform.Categorize(e.Os))).ToList();
+        var platforms = tagged
+            .GroupBy(t => t.Platform)
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .ToList();
+        var platformsPerDay = dayList.Select(d => new PlatformDay
+        {
+            Date = d.ToString("yyyy-MM-dd"),
+            Counts = tagged.Where(t => t.Date == d)
+                .GroupBy(t => t.Platform)
+                .ToDictionary(g => g.Key, g => g.Count()),
+        }).ToList();
+
         var report = new EventReport
         {
             Days = days,
@@ -114,6 +136,8 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 Count = all.Count(e => e.Timestamp.Date == d),
             }).ToList(),
             Events = perName,
+            Platforms = platforms,
+            PlatformsPerDay = platformsPerDay,
             Releases = releases,
             Oses = oses,
         };
@@ -162,6 +186,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         // Pull events once and compute the breakdowns in memory — fine for the
         // proof-of-concept data volumes this server is expected to hold.
         var all = events.FindAll().ToList();
+        var track = trackEvents.FindAll().ToList();
 
         // Same local-time anchoring as GetAnalyticsAsync (LiteDB returns local DateTimes).
         var today = DateTime.Now.Date;
@@ -175,7 +200,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             Errors = all.Count(e => e.IsError),
             Crashes = all.Count(e => e.IsCrash),
             TotalSessions = sessions.Count(),
-            CustomEvents = trackEvents.Count(),
+            CustomEvents = track.Count,
             EventsToday = all.Count(e => e.Timestamp >= today),
             ErrorsLast7Days = all.Count(e => e.IsError && e.Timestamp >= last7),
             ErrorsPrev7Days = all.Count(e => e.IsError && e.Timestamp >= prev7 && e.Timestamp < last7),
@@ -197,11 +222,19 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 .OrderByDescending(c => c.Count)
                 .Take(10)
                 .ToList(),
-            EventsPerDay = all
-                .GroupBy(e => e.Timestamp.Date)
-                .OrderBy(g => g.Key)
+            // Take the last 14 days that carry any activity — Sentry events OR custom
+            // track events — and report both counts per day so the chart can stack them.
+            EventsPerDay = all.Select(e => e.Timestamp.Date)
+                .Concat(track.Select(t => t.Timestamp.Date))
+                .Distinct()
+                .OrderBy(d => d)
                 .TakeLast(14)
-                .Select(g => new DailyCount { Date = g.Key.ToString("yyyy-MM-dd"), Count = g.Count() })
+                .Select(d => new DailyEventCount
+                {
+                    Date = d.ToString("yyyy-MM-dd"),
+                    Events = all.Count(e => e.Timestamp.Date == d),
+                    Custom = track.Count(t => t.Timestamp.Date == d),
+                })
                 .ToList(),
         };
 

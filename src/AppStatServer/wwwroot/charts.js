@@ -96,6 +96,50 @@ function renderBarChart(el, items) {
     `<line class="baseline" x1="0" y1="${baseY}" x2="${W}" y2="${baseY}"></line>${marks}</svg>`;
 }
 
+// ---------- stacked vertical bar chart ----------
+// labels: ["mm-dd", …]. series: [{ name, color, values:[…] }] stacked bottom-up.
+function renderStackedBarChart(el, labels, series) {
+  if (!labels || !labels.length) {
+    el.innerHTML = '<div class="empty">No data</div>';
+    return;
+  }
+  const H = 200, padTop = 18, padBottom = 26, plotH = H - padTop - padBottom;
+  const W = Math.max(el.clientWidth || 600, 120);
+  const n = labels.length;
+  const slot = W / n;
+  const barW = Math.min(40, slot * 0.6);
+  const totals = labels.map((_, i) => series.reduce((s, ser) => s + (ser.values[i] || 0), 0));
+  const max = Math.max(...totals, 1);
+  const baseY = padTop + plotH;
+  const labelStep = Math.max(1, Math.ceil(n / 15));
+
+  let marks = "";
+  labels.forEach((label, i) => {
+    const cx = i * slot + slot / 2;
+    const x = cx - barW / 2;
+    const segs = series.map((ser) => ({ ser, v: ser.values[i] || 0 })).filter((d) => d.v > 0);
+    let yCursor = baseY;
+    segs.forEach((d, idx) => {
+      const h = Math.max((d.v / max) * plotH, 1);
+      const y = yCursor - h;
+      const title = `<title>${escapeHtml(label)} · ${escapeHtml(d.ser.name)}: ${d.v}</title>`;
+      // Round the top of the topmost segment only; lower segments stay square so they abut.
+      marks += idx === segs.length - 1
+        ? `<path class="bar" style="fill:${d.ser.color}" d="${barPath(x, y, barW, h, 4)}">${title}</path>`
+        : `<rect class="bar" style="fill:${d.ser.color}" x="${x}" y="${y}" width="${barW}" height="${h}">${title}</rect>`;
+      yCursor = y;
+    });
+    if (i % labelStep === 0)
+      marks += `<text class="axis-label" x="${cx}" y="${H - 10}" text-anchor="middle">${escapeHtml(label)}</text>`;
+    if (totals[i] > 0)
+      marks += `<text class="axis-label" x="${cx}" y="${yCursor - 4}" text-anchor="middle">${totals[i]}</text>`;
+  });
+
+  el.innerHTML =
+    `<svg class="barchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">` +
+    `<line class="baseline" x1="0" y1="${baseY}" x2="${W}" y2="${baseY}"></line>${marks}</svg>`;
+}
+
 // ---------- horizontal bars (breakdown) ----------
 // items: [{ key, count }]. opts.colorByLevel colors each row by its level.
 function renderHBars(el, items, opts = {}) {

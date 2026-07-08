@@ -26,7 +26,7 @@ public class DashboardStats
 
     public List<CountByKey> EventsByLevel { get; set; } = [];
     public List<CountByKey> EventsByRelease { get; set; } = [];
-    public List<DailyCount> EventsPerDay { get; set; } = [];
+    public List<DailyEventCount> EventsPerDay { get; set; } = [];
 }
 
 public class CountByKey
@@ -39,4 +39,13 @@ public class DailyCount
 {
     public string Date { get; set; } = string.Empty;
     public int Count { get; set; }
+}
+
+// A day split into its two event signals: Sentry crash/log events and custom product
+// (track) events, so the overview chart can stack them.
+public class DailyEventCount
+{
+    public string Date { get; set; } = string.Empty;
+    public int Events { get; set; }
+    public int Custom { get; set; }
 }

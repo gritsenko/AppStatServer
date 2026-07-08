@@ -265,6 +265,52 @@ public class LiteDbEventStorageTests
     }
 
     [Test]
+    public async Task Event_report_buckets_raw_os_into_platforms()
+    {
+        using var storage = NewInMemoryStorage();
+
+        var today = DateTime.Now.Date;
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "open", UserId = "u1", Os = "Android (API level 34)", Timestamp = today },
+            new TrackEvent { Id = "t2", Name = "open", UserId = "u2", Os = "Android (API level 27)", Timestamp = today },
+            new TrackEvent { Id = "t3", Name = "open", UserId = "u3", Os = "Microsoft Windows 10.0.26200", Timestamp = today },
+            new TrackEvent { Id = "t4", Name = "open", UserId = "u4", Os = "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36", Timestamp = today },
+        ]);
+
+        var report = await storage.GetEventReportAsync(days: 7);
+
+        // Raw OS strings collapse to buckets; the two distinct Android builds count as one platform.
+        await Assert.That(report.Oses).IsEquivalentTo(new[] { "Android", "Windows", "Web" });
+        // Ordered most-events-first, so the stacked chart stacks the biggest platform first.
+        await Assert.That(report.Platforms[0]).IsEqualTo("Android");
+
+        var todayRow = report.PlatformsPerDay.Single(d => d.Date == today.ToString("yyyy-MM-dd"));
+        await Assert.That(todayRow.Counts["Android"]).IsEqualTo(2);
+        await Assert.That(todayRow.Counts["Windows"]).IsEqualTo(1);
+        await Assert.That(todayRow.Counts["Web"]).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Event_report_filters_by_platform_bucket()
+    {
+        using var storage = NewInMemoryStorage();
+
+        var today = DateTime.Now.Date;
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "open", UserId = "u1", Os = "Android (API level 34)", Timestamp = today },
+            new TrackEvent { Id = "t2", Name = "open", UserId = "u2", Os = "Microsoft Windows 10.0.26200", Timestamp = today },
+        ]);
+
+        // The `os` argument now carries a platform bucket, not a raw OS string.
+        var report = await storage.GetEventReportAsync(days: 7, os: "Android");
+
+        await Assert.That(report.TotalEvents).IsEqualTo(1);
+        await Assert.That(report.Platforms).IsEquivalentTo(new[] { "Android" });
+    }
+
+    [Test]
     public async Task Facets_report_distinct_releases_and_oses()
     {
         using var storage = NewInMemoryStorage();

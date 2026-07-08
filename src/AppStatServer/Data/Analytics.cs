@@ -64,10 +64,22 @@ public class EventReport
     public List<DailyCount> EventsPerDay { get; set; } = [];
     public List<EventStat> Events { get; set; } = []; // one row per event name, most frequent first
 
+    // Platform buckets present in the (filtered) window, most events first — used to order
+    // the stacked-bar chart and its legend consistently.
+    public List<string> Platforms { get; set; } = [];
+    public List<PlatformDay> PlatformsPerDay { get; set; } = []; // per-day events split by platform
+
     // Distinct values available for the platform / version filters, taken over the whole
     // window (before the current release/os filter) so the dropdowns stay stable.
     public List<string> Releases { get; set; } = [];
     public List<string> Oses { get; set; } = [];
+}
+
+// One day's event volume broken out by platform bucket, for the stacked Events-per-day chart.
+public class PlatformDay
+{
+    public string Date { get; set; } = string.Empty;
+    public Dictionary<string, int> Counts { get; set; } = new(); // platform -> event count
 }
 
 // One event name rolled up: how often, by how many users, and its property value distribution.

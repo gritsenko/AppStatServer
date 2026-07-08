@@ -131,7 +131,7 @@ async function renderOverview() {
       </div>
     </section>
     <section class="panels">
-      <div class="panel"><h2>Events per day (last 14 days)</h2><div id="ov-chart"></div></div>
+      <div class="panel"><h2>Events per day (last 14 days)</h2><div id="ov-chart-legend"></div><div id="ov-chart"></div></div>
       <div class="panel"><h2>Version adoption (active users, 30d)</h2><div class="breakdown" id="ov-versions"></div></div>
     </section>
     <div class="tabs">
@@ -149,10 +149,13 @@ async function renderOverview() {
 
   renderLineChart(document.getElementById("ov-users"), a.usersPerDay.map((d) => d.date), userSeries);
   renderOverviewIssues();
-  renderBarChart(
-    document.getElementById("ov-chart"),
-    (stats.eventsPerDay || []).map((d) => ({ label: d.date.slice(5), value: d.count }))
-  );
+  const epd = stats.eventsPerDay || [];
+  const eventSeries = [
+    { name: "Events", color: "var(--series-1)", values: epd.map((d) => d.events) },
+    { name: "Custom", color: "var(--series-2)", values: epd.map((d) => d.custom) },
+  ];
+  document.getElementById("ov-chart-legend").innerHTML = legendHtml(eventSeries);
+  renderStackedBarChart(document.getElementById("ov-chart"), epd.map((d) => d.date.slice(5)), eventSeries);
   renderHBars(document.getElementById("ov-versions"), a.versionDistribution || []);
 
   const levelSel = document.getElementById("ov-level");
@@ -399,6 +402,20 @@ const crashesFilter = { release: "", os: "" };
 // Server-side platform (os) / app version (release) filters for the Events page.
 const trackFilter = { release: "", os: "" };
 
+// Maps a platform bucket (from the backend) to its chart color; anything unrecognised
+// falls back to the neutral "other" token.
+const PLATFORM_COLORS = {
+  Windows: "var(--plat-windows)",
+  Android: "var(--plat-android)",
+  Web: "var(--plat-web)",
+  Linux: "var(--plat-linux)",
+  macOS: "var(--plat-macos)",
+  iOS: "var(--plat-ios)",
+};
+function platformColor(name) {
+  return PLATFORM_COLORS[name] || "var(--plat-other)";
+}
+
 // Custom product events (sent to /api/track), aggregated into a report.
 async function renderEvents() {
   const qs = new URLSearchParams({ days: String(eventsDays) });
@@ -424,13 +441,22 @@ async function renderEvents() {
       ${statTile("Event types", r.distinctNames)}
       ${statTile("Users", r.users, "sessions")}
     </section>
-    <section class="panel wide"><h2>Events per day</h2><div id="ev-chart"></div></section>
+    <section class="panel wide"><h2>Events per day</h2><div id="ev-chart-legend"></div><div id="ev-chart"></div></section>
     <div class="toolbar"><input class="search" id="ev-search" type="search" placeholder="Search event name…" /></div>
     <div class="table-wrap" id="ev-table"></div>`;
 
-  renderBarChart(
+  // Stack each day's bar into a colored segment per platform (Windows / Android / Web / …).
+  const ppd = r.platformsPerDay || [];
+  const platSeries = (r.platforms || []).map((p) => ({
+    name: p,
+    color: platformColor(p),
+    values: ppd.map((d) => (d.counts && d.counts[p]) || 0),
+  }));
+  document.getElementById("ev-chart-legend").innerHTML = platSeries.length > 1 ? legendHtml(platSeries) : "";
+  renderStackedBarChart(
     document.getElementById("ev-chart"),
-    (r.eventsPerDay || []).map((d) => ({ label: d.date.slice(5), value: d.count }))
+    ppd.map((d) => d.date.slice(5)),
+    platSeries
   );
 
   document.getElementById("ev-search").addEventListener("input", drawEventsTable);

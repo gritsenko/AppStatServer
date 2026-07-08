@@ -16,6 +16,15 @@
   --series-1: #2a78d6;
   --series-2: #1baf7a;
 
+  /* Platform buckets on the Events chart (kept distinct in hue for the stacked bars). */
+  --plat-windows: #2a78d6;
+  --plat-android: #1baf7a;
+  --plat-web: #fab219;
+  --plat-linux: #8a63d2;
+  --plat-macos: #ec835a;
+  --plat-ios: #37b7c3;
+  --plat-other: #898781;
+
   --good: #0ca30c;
   --warning: #fab219;
   --serious: #ec835a;
@@ -324,6 +333,10 @@ input:focus, select:focus { border-color: var(--accent); }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 16px 18px;
+  /* Grid items default to min-width:auto, so a long unbreakable issue title would
+     push this track wider than its share and break the layout. Let it shrink and
+     the .issue-title ellipsis handles the overflow. */
+  min-width: 0;
 }
 .panel h2 { margin: 0 0 14px; font-size: 13px; color: var(--text-2); font-weight: 600; }
 
