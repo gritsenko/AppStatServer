@@ -21,13 +21,27 @@ async function fetchJson(url) {
   return res.json();
 }
 
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    window.location.href = "/login.html";
+    throw new Error("unauthorized");
+  }
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+
 // ---------- routing ----------
 const views = {
   overview: renderOverview,
   analytics: renderAnalytics,
   events: renderEvents,
   logs: renderLogs,
-  crashes: renderCrashes,
+  crashes: renderDiagnostics,
 };
 
 function currentRoute() {
@@ -276,9 +290,12 @@ async function renderAnalytics() {
   });
 }
 
-// ---------- Events / Crashes (grouped, server-filtered by version/OS) ----------
+// ---------- Events / Logs (grouped, server-filtered by version/OS) ----------
 const eventsFilter = { release: "", os: "" };
-const crashesFilter = { release: "", os: "" };
+
+// ---------- Crashes & errors (AppCenter-style diagnostics) ----------
+// release/days are server filters; status/kind/search are applied client-side.
+const diagnostics = { release: "", days: 30, status: "", kind: "", search: "" };
 
 // Custom product events (sent to /api/track), aggregated into a report.
 async function renderEvents() {
@@ -362,15 +379,145 @@ function renderLogs() {
   });
 }
 
-function renderCrashes() {
-  return renderGroupsPage({
-    endpoint: "/api/crash-groups",
-    title: "Crashes",
-    subtitle: "Grouped by signature",
-    withLevel: false,
-    countHeader: "Crashes",
-    filter: crashesFilter,
+// AppCenter-style diagnostics: crashes + handled errors, two per-day charts and one
+// combined table, filterable by app version, with per-issue resolve/reopen.
+async function renderDiagnostics() {
+  if (!cache.facets) cache.facets = await fetchJson("/api/facets");
+  const facets = cache.facets;
+
+  view.innerHTML = `
+    <div class="page-head">
+      <h1>Crashes &amp; errors</h1>
+      <span class="page-sub" id="diag-sub"></span>
+    </div>
+    <div class="toolbar">
+      <div class="range">
+        ${[7, 14, 30, 90].map((d) => `<button class="range-btn ${d === diagnostics.days ? "active" : ""}" data-days="${d}">${d}d</button>`).join("")}
+      </div>
+      <input class="search" id="diag-search" type="search" placeholder="Search message…" value="${escapeHtml(diagnostics.search)}" />
+      <select id="diag-release">${optionList("All versions", facets.releases, diagnostics.release)}</select>
+      <select id="diag-kind">
+        <option value=""${diagnostics.kind === "" ? " selected" : ""}>Crashes &amp; errors</option>
+        <option value="crash"${diagnostics.kind === "crash" ? " selected" : ""}>Crashes only</option>
+        <option value="error"${diagnostics.kind === "error" ? " selected" : ""}>Errors only</option>
+      </select>
+      <select id="diag-status">
+        <option value=""${diagnostics.status === "" ? " selected" : ""}>All statuses</option>
+        <option value="open"${diagnostics.status === "open" ? " selected" : ""}>Open</option>
+        <option value="resolved"${diagnostics.status === "resolved" ? " selected" : ""}>Resolved</option>
+      </select>
+    </div>
+    <section class="cards" id="diag-cards"></section>
+    <section class="panels two">
+      <div class="panel"><h2>Crashes per day</h2><div id="diag-crash-chart"></div></div>
+      <div class="panel"><h2>Errors per day</h2><div id="diag-error-chart"></div></div>
+    </section>
+    <div class="table-wrap" id="diag-table"><div class="empty">Loading…</div></div>`;
+
+  const relSel = document.getElementById("diag-release");
+  const statusSel = document.getElementById("diag-status");
+  const kindSel = document.getElementById("diag-kind");
+  const searchEl = document.getElementById("diag-search");
+
+  relSel.addEventListener("change", () => { diagnostics.release = relSel.value; load(); });
+  statusSel.addEventListener("change", () => { diagnostics.status = statusSel.value; draw(); });
+  kindSel.addEventListener("change", () => { diagnostics.kind = kindSel.value; draw(); });
+  searchEl.addEventListener("input", () => { diagnostics.search = searchEl.value; draw(); });
+  document.querySelectorAll(".range-btn").forEach((b) => {
+    b.addEventListener("click", () => { diagnostics.days = Number(b.dataset.days); renderDiagnostics(); });
   });
+
+  let report = null;
+  await load();
+
+  async function load() {
+    const qs = new URLSearchParams({ days: String(diagnostics.days) });
+    if (diagnostics.release) qs.set("release", diagnostics.release);
+    report = await fetchJson("/api/diagnostics?" + qs);
+
+    document.getElementById("diag-cards").innerHTML =
+      statTile("Crashes", report.totalCrashes, "crashes") +
+      statTile("Errors", report.totalErrors, "errors") +
+      statTile("Affected users", report.affectedUsers, "sessions") +
+      statTile("Open issues", report.openGroups);
+
+    renderBarChart(
+      document.getElementById("diag-crash-chart"),
+      report.crashesPerDay.map((d) => ({ label: d.date.slice(5), value: d.count })),
+      { color: "var(--critical)" }
+    );
+    renderBarChart(
+      document.getElementById("diag-error-chart"),
+      report.errorsPerDay.map((d) => ({ label: d.date.slice(5), value: d.count })),
+      { color: "var(--serious)" }
+    );
+
+    draw();
+  }
+
+  function draw() {
+    const q = diagnostics.search.trim().toLowerCase();
+    const rows = report.groups.filter((g) => {
+      if (diagnostics.kind && g.kind !== diagnostics.kind) return false;
+      if (diagnostics.status === "open" && g.resolved) return false;
+      if (diagnostics.status === "resolved" && !g.resolved) return false;
+      if (!q) return true;
+      return [g.title, g.release].some((v) => String(v ?? "").toLowerCase().includes(q));
+    });
+
+    document.getElementById("diag-sub").textContent =
+      `Last ${report.days} days · ${rows.length} issue${rows.length === 1 ? "" : "s"}` +
+      (diagnostics.release ? ` · ${diagnostics.release}` : "");
+
+    const host = document.getElementById("diag-table");
+    if (!rows.length) {
+      host.innerHTML = report.totalCrashes || report.totalErrors
+        ? '<div class="empty">No issues match this filter.</div>'
+        : '<div class="empty">No crashes or errors in this window. 🎉</div>';
+      return;
+    }
+    host.innerHTML =
+      `<table><thead><tr><th>Type</th><th>Message</th><th class="num">Count</th><th class="num">Users</th><th>Last seen</th><th>Version</th><th>Status</th><th></th></tr></thead><tbody>` +
+      rows
+        .map((g, i) => {
+          const kindBadge = g.kind === "crash"
+            ? '<span class="kind kind-crash">Crash</span>'
+            : '<span class="kind kind-error">Error</span>';
+          const statusBadge = g.resolved
+            ? '<span class="status resolved">Resolved</span>'
+            : '<span class="status open">Open</span>';
+          return `<tr class="clickable ${g.resolved ? "is-resolved" : ""}" data-i="${i}">
+            <td>${kindBadge}</td>
+            <td class="msg"><div class="text">${escapeHtml(g.title)}</div></td>
+            <td class="num"><b>${g.count}</b></td>
+            <td class="num">${g.users}</td>
+            <td class="time" title="${fmtTime(g.lastSeen)}">${timeAgo(g.lastSeen)}</td>
+            <td>${escapeHtml(g.release || "-")}</td>
+            <td>${statusBadge}</td>
+            <td class="actions"><button class="resolve-btn" data-i="${i}">${g.resolved ? "Reopen" : "Resolve"}</button></td></tr>`;
+        })
+        .join("") +
+      `</tbody></table>`;
+
+    host.querySelectorAll("tr.clickable").forEach((tr) => {
+      tr.addEventListener("click", (e) => {
+        if (e.target.closest(".resolve-btn")) return;
+        const g = rows[Number(tr.dataset.i)];
+        openEventModal(g.sample, g, resolve);
+      });
+    });
+    host.querySelectorAll(".resolve-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        resolve(rows[Number(btn.dataset.i)]);
+      });
+    });
+  }
+
+  async function resolve(group) {
+    await postJson("/api/resolve", { key: group.key, resolved: !group.resolved });
+    await load();
+  }
 }
 
 function optionList(allLabel, values, selected) {
@@ -470,17 +617,37 @@ function statTile(label, value, cls = "") {
   return `<div class="card ${cls}"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(String(value))}</div></div>`;
 }
 
-function openEventModal(ev, group) {
+function openEventModal(ev, group, onResolve) {
   modalTitle.innerHTML = `<span class="badge ${levelClass(ev.level)}">${escapeHtml(ev.level || "-")}</span> ${escapeHtml(ev.message)}`;
 
   const groupRows = group
     ? [
+        ...(group.kind ? [["Type", group.kind === "crash" ? "Crash" : "Error"]] : []),
         ["Occurrences", String(group.count)],
         ["Affected users", String(group.users)],
         ["First seen", fmtTime(group.firstSeen)],
         ["Last seen", fmtTime(group.lastSeen)],
+        ...(group.resolved !== undefined
+          ? [["Status", group.resolved
+              ? "Resolved" + (group.resolvedAt ? " · " + fmtTime(group.resolvedAt) : "")
+              : "Open"]]
+          : []),
       ]
     : [];
+
+  // A resolve/reopen action is available only when the caller passes a handler (diagnostics page).
+  const resolveBtn = document.getElementById("modal-resolve");
+  if (onResolve && group && group.key) {
+    resolveBtn.hidden = false;
+    resolveBtn.textContent = group.resolved ? "Reopen" : "Resolve";
+    resolveBtn.onclick = async () => {
+      await onResolve(group);
+      closeModal();
+    };
+  } else {
+    resolveBtn.hidden = true;
+    resolveBtn.onclick = null;
+  }
 
   const rows = [
     ...groupRows,
@@ -508,6 +675,10 @@ function openEventModal(ev, group) {
 
 // Detail for a custom event: totals + a value breakdown per property key.
 function openTrackEventModal(stat) {
+  const resolveBtn = document.getElementById("modal-resolve");
+  resolveBtn.hidden = true;
+  resolveBtn.onclick = null;
+
   modalTitle.innerHTML = `<span class="badge lvl-info">event</span> ${escapeHtml(stat.name)}`;
 
   const meta = [

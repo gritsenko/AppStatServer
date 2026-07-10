@@ -25,4 +25,11 @@ public interface IEventStorage
     Task<Facets> GetFacetsAsync();
 
     Task<EventReport> GetEventReportAsync(int days);
+
+    // Combined crashes + handled-errors report over a rolling window, optionally narrowed
+    // to one app version. Carries the two per-day series and the grouped signatures.
+    Task<DiagnosticsReport> GetDiagnosticsAsync(int days, string? release = null);
+
+    // Mark a crash/error group (by its DiagnosticGroup.Key) resolved or reopen it.
+    Task<bool> SetResolutionAsync(string key, bool resolved);
 }

@@ -62,8 +62,8 @@ function barPath(x, y, w, h, r) {
   return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
 }
 
-// items: [{ label, value }]
-function renderBarChart(el, items) {
+// items: [{ label, value }]. opts.color overrides the bar fill (e.g. "var(--critical)").
+function renderBarChart(el, items, opts = {}) {
   if (!items || !items.length) {
     el.innerHTML = '<div class="empty">No data</div>';
     return;
@@ -91,8 +91,9 @@ function renderBarChart(el, items) {
       marks += `<text class="axis-label" x="${cx}" y="${y - 4}" text-anchor="middle">${d.value}</text>`;
   });
 
+  const colorStyle = opts.color ? ` style="--bar:${opts.color}"` : "";
   el.innerHTML =
-    `<svg class="barchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">` +
+    `<svg class="barchart"${colorStyle} viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">` +
     `<line class="baseline" x1="0" y1="${baseY}" x2="${W}" y2="${baseY}"></line>${marks}</svg>`;
 }
 

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using AppStatServer;
 using AppStatServer.Auth;
+using AppStatServer.Data;
 using AppStatServer.Sentry;
 using AppStatServer.Tracking;
 using Microsoft.AspNetCore.Authentication;
@@ -140,6 +141,12 @@ api.MapGet("/facets", (IEventStorage es) => es.GetFacetsAsync());
 api.MapGet("/track-events", (IEventStorage es) => es.GetRecentTrackEventsAsync());
 api.MapGet("/events-report", (IEventStorage es, int? days) =>
     es.GetEventReportAsync(days is >= 1 and <= 90 ? days.Value : 30));
+api.MapGet("/diagnostics", (IEventStorage es, int? days, string? release) =>
+    es.GetDiagnosticsAsync(days is >= 1 and <= 90 ? days.Value : 30, release));
+api.MapPost("/resolve", async (ResolveRequest req, IEventStorage es) =>
+    string.IsNullOrEmpty(req.Key)
+        ? Results.BadRequest(new { error = "key is required" })
+        : Results.Ok(new { key = req.Key, resolved = await es.SetResolutionAsync(req.Key, req.Resolved) }));
 
 // --- Ingest (anonymous: SDKs authenticate with their DSN, not the dashboard cookie) ---
 _ = new EnvelopeHandler(app);

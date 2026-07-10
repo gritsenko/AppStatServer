@@ -22,8 +22,9 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
     top devices.
   - **Events** — all non-crash events grouped by message (count / affected users / last
     seen), filterable by app version and OS.
-  - **Crashes** — crashes grouped by signature, with stack traces, filterable by app
-    version and OS.
+  - **Crashes** — AppCenter-style diagnostics: crashes-per-day and errors-per-day charts,
+    plus one combined table of crash and handled-error signatures, filterable by app
+    version, with per-issue resolve/reopen (a resolved issue reopens if it recurs).
 
 ### Endpoints
 
@@ -41,6 +42,8 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
 | GET    | `/api/analytics?days=` | cookie | Usage analytics over a window (days 1–90, default 30) |
 | GET    | `/api/event-groups?release=&os=` | cookie | Non-crash events grouped by message (optional version/OS filter) |
 | GET    | `/api/crash-groups?release=&os=` | cookie | Crashes grouped by signature (optional version/OS filter) |
+| GET    | `/api/diagnostics?days=&release=` | cookie | Crashes + handled errors: per-day series and grouped signatures with resolution state (days 1–90, optional version filter) |
+| POST   | `/api/resolve`       | cookie | Mark a crash/error group resolved or reopen it (`{ "key", "resolved" }`) |
 | GET    | `/api/facets`        | cookie | Distinct releases & OSes for the filter dropdowns |
 
 The dashboard is a single protected page with client-side routing

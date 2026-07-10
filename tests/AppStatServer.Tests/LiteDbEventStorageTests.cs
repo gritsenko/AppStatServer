@@ -162,6 +162,115 @@ public class LiteDbEventStorageTests
     }
 
     [Test]
+    public async Task Diagnostics_split_crashes_from_handled_errors()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        await storage.SaveEventsAsync(
+        [
+            // Handled error (exception, but no thread crashed).
+            new AppEvent { Id = "e1", UserId = "u1", Level = "error", Message = "Boom", IsError = true, Release = "1.0.0", Timestamp = now.AddDays(-1) },
+            new AppEvent { Id = "e2", UserId = "u2", Level = "error", Message = "Boom", IsError = true, Release = "1.0.0", Timestamp = now },
+            // Crash (thread crashed). A crash usually also carries the exception flag.
+            new AppEvent { Id = "c1", UserId = "u1", Level = "fatal", Message = "Fatal", IsError = true, IsCrash = true, Release = "1.0.0", Timestamp = now },
+            // Plain info log: neither a crash nor an error, must be excluded.
+            new AppEvent { Id = "i1", UserId = "u3", Level = "info", Message = "Hello", Release = "1.0.0", Timestamp = now },
+        ]);
+
+        var report = await storage.GetDiagnosticsAsync(30);
+
+        await Assert.That(report.TotalCrashes).IsEqualTo(1);
+        await Assert.That(report.TotalErrors).IsEqualTo(2);
+        await Assert.That(report.AffectedUsers).IsEqualTo(2); // u1, u2 (u3 only logged info)
+        await Assert.That(report.Groups.Count).IsEqualTo(2);  // one crash group + one error group
+
+        var crash = report.Groups.Single(g => g.Kind == "crash");
+        await Assert.That(crash.Title).IsEqualTo("Fatal");
+        await Assert.That(crash.Resolved).IsFalse();
+
+        var error = report.Groups.Single(g => g.Kind == "error");
+        await Assert.That(error.Title).IsEqualTo("Boom");
+        await Assert.That(error.Count).IsEqualTo(2);
+        await Assert.That(error.Users).IsEqualTo(2);
+
+        await Assert.That(report.CrashesPerDay.Count).IsEqualTo(30);
+        await Assert.That(report.CrashesPerDay.Sum(d => d.Count)).IsEqualTo(1);
+        await Assert.That(report.ErrorsPerDay.Sum(d => d.Count)).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Diagnostics_can_be_filtered_by_release()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", UserId = "u1", Message = "Boom", IsError = true, Release = "1.0.0", Timestamp = now },
+            new AppEvent { Id = "e2", UserId = "u2", Message = "Boom", IsError = true, Release = "1.0.1", Timestamp = now },
+        ]);
+
+        var report = await storage.GetDiagnosticsAsync(30, release: "1.0.0");
+
+        await Assert.That(report.TotalErrors).IsEqualTo(1);
+        await Assert.That(report.Groups.Single().Release).IsEqualTo("1.0.0");
+    }
+
+    [Test]
+    public async Task Resolving_a_group_marks_it_resolved_and_reopening_clears_it()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", UserId = "u1", Message = "Boom", IsError = true, Release = "1.0.0", Timestamp = now.AddMinutes(-5) },
+        ]);
+
+        var before = await storage.GetDiagnosticsAsync(30);
+        var key = before.Groups.Single().Key;
+        await Assert.That(before.Groups.Single().Resolved).IsFalse();
+
+        await storage.SetResolutionAsync(key, true);
+
+        var afterResolve = await storage.GetDiagnosticsAsync(30);
+        await Assert.That(afterResolve.Groups.Single().Resolved).IsTrue();
+        await Assert.That(afterResolve.OpenGroups).IsEqualTo(0);
+
+        await storage.SetResolutionAsync(key, false);
+
+        var afterReopen = await storage.GetDiagnosticsAsync(30);
+        await Assert.That(afterReopen.Groups.Single().Resolved).IsFalse();
+        await Assert.That(afterReopen.OpenGroups).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Resolved_group_reopens_when_it_recurs()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", UserId = "u1", Message = "Boom", IsError = true, Timestamp = now.AddDays(-2) },
+        ]);
+
+        var key = (await storage.GetDiagnosticsAsync(30)).Groups.Single().Key;
+        await storage.SetResolutionAsync(key, true);
+        await Assert.That((await storage.GetDiagnosticsAsync(30)).Groups.Single().Resolved).IsTrue();
+
+        // The same signature happens again after it was resolved -> it must reopen.
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e2", UserId = "u2", Message = "Boom", IsError = true, Timestamp = now.AddMinutes(5) },
+        ]);
+
+        var after = await storage.GetDiagnosticsAsync(30);
+        await Assert.That(after.Groups.Single().Resolved).IsFalse();
+    }
+
+    [Test]
     public async Task Facets_report_distinct_releases_and_oses()
     {
         using var storage = NewInMemoryStorage();

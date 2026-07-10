@@ -306,6 +306,103 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         return Task.FromResult(facets);
     }
 
+    public Task<DiagnosticsReport> GetDiagnosticsAsync(int days, string? release = null)
+    {
+        var col = _db.GetCollection<AppEvent>("events");
+
+        // Same local-time window handling as GetAnalyticsAsync.
+        var today = DateTime.Now.Date;
+        var start = today.AddDays(-(days - 1));
+        var dayList = Enumerable.Range(0, days).Select(i => start.AddDays(i)).ToList();
+
+        var all = col.Find(e => e.Timestamp >= start).ToList();
+        if (!string.IsNullOrEmpty(release))
+            all = all.Where(e => e.Release == release).ToList();
+
+        // Crashes = unhandled (a thread crashed). Errors = handled exceptions the app
+        // reported without terminating. The two are disjoint, matching AppCenter.
+        var crashes = all.Where(e => e.IsCrash).ToList();
+        var errors = all.Where(e => e.IsError && !e.IsCrash).ToList();
+
+        var resolutions = _db.GetCollection<Resolution>("resolutions").FindAll()
+            .GroupBy(r => r.Key)
+            .ToDictionary(g => g.Key, g => g.Max(r => r.ResolvedAt));
+
+        var groups = BuildDiagnosticGroups(crashes, "crash", resolutions)
+            .Concat(BuildDiagnosticGroups(errors, "error", resolutions))
+            .OrderByDescending(g => g.LastSeen)
+            .Take(300)
+            .ToList();
+
+        var report = new DiagnosticsReport
+        {
+            Days = days,
+            Release = release,
+            TotalCrashes = crashes.Count,
+            TotalErrors = errors.Count,
+            AffectedUsers = crashes.Concat(errors)
+                .Select(e => e.UserId).Where(u => !string.IsNullOrEmpty(u)).Distinct().Count(),
+            OpenGroups = groups.Count(g => !g.Resolved),
+            CrashesPerDay = dayList.Select(d => new DailyCount
+            {
+                Date = d.ToString("yyyy-MM-dd"),
+                Count = crashes.Count(e => e.Timestamp.Date == d),
+            }).ToList(),
+            ErrorsPerDay = dayList.Select(d => new DailyCount
+            {
+                Date = d.ToString("yyyy-MM-dd"),
+                Count = errors.Count(e => e.Timestamp.Date == d),
+            }).ToList(),
+            Groups = groups,
+        };
+
+        return Task.FromResult(report);
+    }
+
+    // Collapse events into per-message signatures, tagging each with its resolution state.
+    private static List<DiagnosticGroup> BuildDiagnosticGroups(
+        List<AppEvent> events, string kind, IReadOnlyDictionary<string, DateTime> resolutions)
+    {
+        return events
+            .GroupBy(e => kind + "|" + e.Message)
+            .Select(g =>
+            {
+                var latest = g.OrderByDescending(e => e.Timestamp).First();
+                latest.EventEntry = null; // trim the bulky raw payload from the sample
+
+                var lastSeen = g.Max(e => e.Timestamp);
+                var resolvedAt = resolutions.TryGetValue(g.Key, out var at) ? at : (DateTime?)null;
+
+                return new DiagnosticGroup
+                {
+                    Key = g.Key,
+                    Kind = kind,
+                    Title = latest.Message,
+                    Level = latest.Level,
+                    Count = g.Count(),
+                    Users = g.Select(e => e.UserId).Where(u => !string.IsNullOrEmpty(u)).Distinct().Count(),
+                    Release = latest.Release,
+                    FirstSeen = g.Min(e => e.Timestamp),
+                    LastSeen = lastSeen,
+                    // Resolved only while nothing newer has come in — a recurrence reopens it.
+                    Resolved = resolvedAt.HasValue && lastSeen <= resolvedAt.Value,
+                    ResolvedAt = resolvedAt,
+                    Sample = latest,
+                };
+            })
+            .ToList();
+    }
+
+    public Task<bool> SetResolutionAsync(string key, bool resolved)
+    {
+        var col = _db.GetCollection<Resolution>("resolutions");
+        col.EnsureIndex(r => r.Key);
+        col.DeleteMany(r => r.Key == key);
+        if (resolved)
+            col.Insert(new Resolution { Key = key, ResolvedAt = DateTime.Now });
+        return Task.FromResult(resolved);
+    }
+
     private static List<CountByKey> BuildDurationBuckets(List<AppSession> sessions)
     {
         (string Label, Func<int, bool> Match)[] buckets =
