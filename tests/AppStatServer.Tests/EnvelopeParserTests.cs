@@ -63,7 +63,8 @@ public class EnvelopeParserTests
         await Assert.That(session.Seq).IsEqualTo(2);
         await Assert.That(session.Duration).IsEqualTo(300);
         await Assert.That(session.Errors).IsEqualTo(1);
-        await Assert.That(session.Release).IsEqualTo("myapp@1.2.3");
+        // Session releases get the same "app@1.2.3" -> "1.2.3" normalisation as events.
+        await Assert.That(session.Release).IsEqualTo("1.2.3");
         await Assert.That(session.Environment).IsEqualTo("production");
     }
 
@@ -88,6 +89,35 @@ public class EnvelopeParserTests
         await Assert.That(parsed.Events[0].Message).IsEqualTo("hello");
         await Assert.That(parsed.Events[0].Release).IsEqualTo(string.Empty);
         await Assert.That(parsed.Events[0].StackTrace).IsNull();
+    }
+
+    [Test]
+    public async Task Event_with_blank_event_id_gets_a_generated_id()
+    {
+        // A blank id must not reach storage as "" — LiteDB would try to auto-generate an
+        // ObjectId for it and then fail casting back to the string Id property.
+        const string blankIdEvent =
+            """{"event_id":"","timestamp":"2024-04-18T20:00:00Z","level":"info","logentry":{"message":"hello"}}""";
+
+        var parsed = EnvelopeParser.Parse(blankIdEvent);
+
+        await Assert.That(parsed.Events.Count).IsEqualTo(1);
+        await Assert.That(parsed.Events[0].Id).IsNotNull();
+        await Assert.That(parsed.Events[0].Id).IsNotEmpty();
+        // The response id echoes the id we actually stored, never a blank string.
+        await Assert.That(parsed.LastId).IsEqualTo(parsed.Events[0].Id);
+    }
+
+    [Test]
+    public async Task Session_with_blank_sid_is_skipped()
+    {
+        // sid is the upsert key; a blank one can't be a key and would blow up on persist.
+        const string blankSidSession =
+            """{"sid":"","did":"device-1","init":true,"started":"2024-04-18T20:00:00Z","timestamp":"2024-04-18T20:05:00Z","seq":1,"duration":60,"errors":0,"attrs":{"release":"myapp@1.2.3","environment":"production"}}""";
+
+        var parsed = EnvelopeParser.Parse(blankSidSession);
+
+        await Assert.That(parsed.Sessions).IsEmpty();
     }
 
     [Test]

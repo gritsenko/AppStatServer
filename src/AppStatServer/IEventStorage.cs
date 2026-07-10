@@ -24,7 +24,8 @@ public interface IEventStorage
 
     Task<Facets> GetFacetsAsync();
 
-    Task<EventReport> GetEventReportAsync(int days);
+    // Optional release/os narrow the events before rolling them up.
+    Task<EventReport> GetEventReportAsync(int days, string? release = null, string? os = null);
 
     // Combined crashes + handled-errors report over a rolling window, optionally narrowed
     // to one app version. Carries the two per-day series and the grouped signatures.

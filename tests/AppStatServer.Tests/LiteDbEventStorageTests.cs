@@ -81,6 +81,109 @@ public class LiteDbEventStorageTests
     }
 
     [Test]
+    public async Task Stats_report_rolling_health_windows()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", Level = "info", Timestamp = now },
+            new AppEvent { Id = "e2", Level = "error", IsError = true, Timestamp = now.AddDays(-1) },
+            new AppEvent { Id = "e3", Level = "fatal", IsError = true, IsCrash = true, Timestamp = now.AddDays(-2) },
+            // Previous 7-day window (8-9 days ago) — the trend baseline.
+            new AppEvent { Id = "e4", Level = "error", IsError = true, Timestamp = now.AddDays(-8) },
+            new AppEvent { Id = "e5", Level = "fatal", IsError = true, IsCrash = true, Timestamp = now.AddDays(-8) },
+            new AppEvent { Id = "e6", Level = "fatal", IsError = true, IsCrash = true, Timestamp = now.AddDays(-9) },
+            // Far outside both windows.
+            new AppEvent { Id = "e7", Level = "error", IsError = true, Timestamp = now.AddDays(-30) },
+        ]);
+        await storage.SaveSessionsAsync(
+        [
+            new AppSession { Id = "s1", Started = now.AddDays(-1), Errors = 0 },
+            new AppSession { Id = "s2", Started = now.AddDays(-2), Errors = 0 },
+            new AppSession { Id = "s3", Started = now.AddDays(-3), Errors = 2 },
+            new AppSession { Id = "s4", Started = now.AddDays(-20), Errors = 5 }, // outside the window
+        ]);
+
+        var stats = await storage.GetStatsAsync();
+
+        await Assert.That(stats.EventsToday).IsEqualTo(1);
+        await Assert.That(stats.ErrorsLast7Days).IsEqualTo(2);
+        await Assert.That(stats.ErrorsPrev7Days).IsEqualTo(3);
+        await Assert.That(stats.CrashesLast7Days).IsEqualTo(1);
+        await Assert.That(stats.CrashesPrev7Days).IsEqualTo(2);
+        await Assert.That(stats.SessionsLast7Days).IsEqualTo(3);
+        await Assert.That(Math.Round(stats.CrashFreeSessionsPct!.Value, 1)).IsEqualTo(66.7);
+    }
+
+    [Test]
+    public async Task Stats_crash_free_pct_is_null_without_recent_sessions()
+    {
+        using var storage = NewInMemoryStorage();
+
+        await storage.SaveSessionsAsync([new AppSession { Id = "s1", Started = DateTime.Now.AddDays(-20), Errors = 0 }]);
+
+        var stats = await storage.GetStatsAsync();
+
+        await Assert.That(stats.SessionsLast7Days).IsEqualTo(0);
+        await Assert.That(stats.CrashFreeSessionsPct).IsNull();
+    }
+
+    [Test]
+    public async Task Stats_count_custom_events_separately_from_sentry_events()
+    {
+        using var storage = NewInMemoryStorage();
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", Level = "info", Timestamp = new DateTime(2024, 4, 18) },
+            new AppEvent { Id = "e2", Level = "error", IsError = true, Timestamp = new DateTime(2024, 4, 18) },
+        ]);
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "level_start", UserId = "u1", Timestamp = new DateTime(2024, 4, 18) },
+            new TrackEvent { Id = "t2", Name = "purchase", UserId = "u2", Timestamp = new DateTime(2024, 4, 18) },
+            new TrackEvent { Id = "t3", Name = "level_start", UserId = "u1", Timestamp = new DateTime(2024, 4, 19) },
+        ]);
+
+        var stats = await storage.GetStatsAsync();
+
+        await Assert.That(stats.TotalEvents).IsEqualTo(2);   // Sentry events only
+        await Assert.That(stats.CustomEvents).IsEqualTo(3);  // track events, counted apart
+    }
+
+    [Test]
+    public async Task Analytics_count_track_only_users_as_active_and_new()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        // u1 exists only via a Sentry event; u2 exists only via a custom track event.
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent { Id = "e1", UserId = "u1", Level = "info", Release = "1.0.0", Os = "Android 13", DeviceModel = "Pixel 7", Timestamp = now },
+        ]);
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "purchase", UserId = "u2", Release = "1.0.1", Os = "iOS 17", Timestamp = now },
+        ]);
+
+        var a = await storage.GetAnalyticsAsync(30);
+
+        // Both users are active/new even though u2 never sent a Sentry event.
+        await Assert.That(a.Mau).IsEqualTo(2);
+        await Assert.That(a.Dau).IsEqualTo(2);
+        await Assert.That(a.NewUsers).IsEqualTo(2);
+        // Version/OS distributions span both signals...
+        await Assert.That(a.VersionDistribution.Single(v => v.Key == "1.0.1").Count).IsEqualTo(1);
+        await Assert.That(a.OsDistribution.Single(o => o.Key == "iOS 17").Count).IsEqualTo(1);
+        // ...but device distribution stays Sentry-only (track events carry no device model).
+        await Assert.That(a.DeviceDistribution.Count).IsEqualTo(1);
+        await Assert.That(a.DeviceDistribution.Single(d => d.Key == "Pixel 7").Count).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Analytics_computes_users_sessions_and_distributions()
     {
         using var storage = NewInMemoryStorage();
@@ -268,6 +371,52 @@ public class LiteDbEventStorageTests
 
         var after = await storage.GetDiagnosticsAsync(30);
         await Assert.That(after.Groups.Single().Resolved).IsFalse();
+    }
+
+    [Test]
+    public async Task Event_report_buckets_raw_os_into_platforms()
+    {
+        using var storage = NewInMemoryStorage();
+
+        var today = DateTime.Now.Date;
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "open", UserId = "u1", Os = "Android (API level 34)", Timestamp = today },
+            new TrackEvent { Id = "t2", Name = "open", UserId = "u2", Os = "Android (API level 27)", Timestamp = today },
+            new TrackEvent { Id = "t3", Name = "open", UserId = "u3", Os = "Microsoft Windows 10.0.26200", Timestamp = today },
+            new TrackEvent { Id = "t4", Name = "open", UserId = "u4", Os = "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36", Timestamp = today },
+        ]);
+
+        var report = await storage.GetEventReportAsync(days: 7);
+
+        // Raw OS strings collapse to buckets; the two distinct Android builds count as one platform.
+        await Assert.That(report.Oses).IsEquivalentTo(new[] { "Android", "Windows", "Web" });
+        // Ordered most-events-first, so the stacked chart stacks the biggest platform first.
+        await Assert.That(report.Platforms[0]).IsEqualTo("Android");
+
+        var todayRow = report.PlatformsPerDay.Single(d => d.Date == today.ToString("yyyy-MM-dd"));
+        await Assert.That(todayRow.Counts["Android"]).IsEqualTo(2);
+        await Assert.That(todayRow.Counts["Windows"]).IsEqualTo(1);
+        await Assert.That(todayRow.Counts["Web"]).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Event_report_filters_by_platform_bucket()
+    {
+        using var storage = NewInMemoryStorage();
+
+        var today = DateTime.Now.Date;
+        await storage.SaveTrackEventsAsync(
+        [
+            new TrackEvent { Id = "t1", Name = "open", UserId = "u1", Os = "Android (API level 34)", Timestamp = today },
+            new TrackEvent { Id = "t2", Name = "open", UserId = "u2", Os = "Microsoft Windows 10.0.26200", Timestamp = today },
+        ]);
+
+        // The `os` argument now carries a platform bucket, not a raw OS string.
+        var report = await storage.GetEventReportAsync(days: 7, os: "Android");
+
+        await Assert.That(report.TotalEvents).IsEqualTo(1);
+        await Assert.That(report.Platforms).IsEquivalentTo(new[] { "Android" });
     }
 
     [Test]

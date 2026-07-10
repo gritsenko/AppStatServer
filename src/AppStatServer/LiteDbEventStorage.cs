@@ -64,7 +64,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         return Task.FromResult(result.ToImmutableList());
     }
 
-    public Task<EventReport> GetEventReportAsync(int days)
+    public Task<EventReport> GetEventReportAsync(int days, string? release = null, string? os = null)
     {
         var col = _db.GetCollection<TrackEvent>("trackevents");
 
@@ -73,7 +73,26 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         var start = today.AddDays(-(days - 1));
         var dayList = Enumerable.Range(0, days).Select(i => start.AddDays(i)).ToList();
 
-        var all = col.Find(e => e.Timestamp >= start).ToList();
+        var windowed = col.Find(e => e.Timestamp >= start).ToList();
+
+        // Filter facets are computed over the whole window (before release/os narrowing),
+        // so selecting one value doesn't collapse the other dropdown's options. The raw OS /
+        // user-agent strings are collapsed into platform buckets (Windows, Android, Web, …)
+        // so the dropdown lists a handful of platforms instead of every distinct OS build.
+        var releases = windowed.Where(e => !string.IsNullOrEmpty(e.Release))
+            .Select(e => e.Release).Distinct().OrderBy(x => x).ToList();
+        var oses = windowed
+            .GroupBy(e => Platform.Categorize(e.Os))
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .ToList();
+
+        var all = windowed;
+        if (!string.IsNullOrEmpty(release))
+            all = all.Where(e => e.Release == release).ToList();
+        // The `os` filter now carries a platform bucket rather than a raw OS string.
+        if (!string.IsNullOrEmpty(os))
+            all = all.Where(e => Platform.Categorize(e.Os) == os).ToList();
 
         var perName = all
             .GroupBy(e => e.Name)
@@ -89,6 +108,22 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             .OrderByDescending(s => s.Count)
             .ToList();
 
+        // Tag each event with its platform once, then roll up: which platforms appear (most
+        // events first, to order the stack) and each day's per-platform event counts.
+        var tagged = all.Select(e => (e.Timestamp.Date, Platform: Platform.Categorize(e.Os))).ToList();
+        var platforms = tagged
+            .GroupBy(t => t.Platform)
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .ToList();
+        var platformsPerDay = dayList.Select(d => new PlatformDay
+        {
+            Date = d.ToString("yyyy-MM-dd"),
+            Counts = tagged.Where(t => t.Date == d)
+                .GroupBy(t => t.Platform)
+                .ToDictionary(g => g.Key, g => g.Count()),
+        }).ToList();
+
         var report = new EventReport
         {
             Days = days,
@@ -101,6 +136,10 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 Count = all.Count(e => e.Timestamp.Date == d),
             }).ToList(),
             Events = perName,
+            Platforms = platforms,
+            PlatformsPerDay = platformsPerDay,
+            Releases = releases,
+            Oses = oses,
         };
 
         return Task.FromResult(report);
@@ -142,10 +181,18 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
     {
         var events = _db.GetCollection<AppEvent>("events");
         var sessions = _db.GetCollection<AppSession>("sessions");
+        var trackEvents = _db.GetCollection<TrackEvent>("trackevents");
 
         // Pull events once and compute the breakdowns in memory — fine for the
         // proof-of-concept data volumes this server is expected to hold.
         var all = events.FindAll().ToList();
+        var track = trackEvents.FindAll().ToList();
+
+        // Same local-time anchoring as GetAnalyticsAsync (LiteDB returns local DateTimes).
+        var today = DateTime.Now.Date;
+        var last7 = today.AddDays(-6);
+        var prev7 = today.AddDays(-13);
+        var recentSessions = sessions.Find(s => s.Started >= last7).ToList();
 
         var stats = new DashboardStats
         {
@@ -153,6 +200,16 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             Errors = all.Count(e => e.IsError),
             Crashes = all.Count(e => e.IsCrash),
             TotalSessions = sessions.Count(),
+            CustomEvents = track.Count,
+            EventsToday = all.Count(e => e.Timestamp >= today),
+            ErrorsLast7Days = all.Count(e => e.IsError && e.Timestamp >= last7),
+            ErrorsPrev7Days = all.Count(e => e.IsError && e.Timestamp >= prev7 && e.Timestamp < last7),
+            CrashesLast7Days = all.Count(e => e.IsCrash && e.Timestamp >= last7),
+            CrashesPrev7Days = all.Count(e => e.IsCrash && e.Timestamp >= prev7 && e.Timestamp < last7),
+            SessionsLast7Days = recentSessions.Count,
+            CrashFreeSessionsPct = recentSessions.Count > 0
+                ? 100.0 * recentSessions.Count(s => s.Errors == 0) / recentSessions.Count
+                : null,
             EventsByLevel = all
                 .GroupBy(e => string.IsNullOrEmpty(e.Level) ? "-" : e.Level)
                 .Select(g => new CountByKey { Key = g.Key, Count = g.Count() })
@@ -165,40 +222,61 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 .OrderByDescending(c => c.Count)
                 .Take(10)
                 .ToList(),
-            EventsPerDay = all
-                .GroupBy(e => e.Timestamp.Date)
-                .OrderBy(g => g.Key)
+            // Take the last 14 days that carry any activity — Sentry events OR custom
+            // track events — and report both counts per day so the chart can stack them.
+            EventsPerDay = all.Select(e => e.Timestamp.Date)
+                .Concat(track.Select(t => t.Timestamp.Date))
+                .Distinct()
+                .OrderBy(d => d)
                 .TakeLast(14)
-                .Select(g => new DailyCount { Date = g.Key.ToString("yyyy-MM-dd"), Count = g.Count() })
+                .Select(d => new DailyEventCount
+                {
+                    Date = d.ToString("yyyy-MM-dd"),
+                    Events = all.Count(e => e.Timestamp.Date == d),
+                    Custom = track.Count(t => t.Timestamp.Date == d),
+                })
                 .ToList(),
         };
 
         return Task.FromResult(stats);
     }
 
+    // A minimal per-user activity signal, projected from either an AppEvent (Sentry) or a
+    // TrackEvent (custom product event), so usage analytics reflect real engagement rather
+    // than crashes/errors alone. (Device model is intentionally omitted — track events carry none.)
+    private readonly record struct UserActivity(string UserId, DateTime Timestamp, string Release, string? Os);
+
     public Task<AnalyticsData> GetAnalyticsAsync(int days)
     {
         var events = _db.GetCollection<AppEvent>("events");
         var sessions = _db.GetCollection<AppSession>("sessions");
+        var trackEvents = _db.GetCollection<TrackEvent>("trackevents");
 
         // LiteDB returns DateTimes as local time, so anchor the window on local "now".
         var today = DateTime.Now.Date;
         var start = today.AddDays(-(days - 1));
         var dayList = Enumerable.Range(0, days).Select(i => start.AddDays(i)).ToList();
 
-        var allEvents = events.FindAll().Where(e => !string.IsNullOrEmpty(e.UserId)).ToList();
+        // Any user-attributed signal counts as activity — Sentry events AND custom product
+        // events — so a user who never crashes still registers as active.
+        var appEvents = events.FindAll().ToList();
+        var activity = appEvents
+            .Select(e => new UserActivity(e.UserId, e.Timestamp, e.Release, e.Os))
+            .Concat(trackEvents.FindAll().Select(t => new UserActivity(t.UserId, t.Timestamp, t.Release, t.Os)))
+            .Where(a => !string.IsNullOrEmpty(a.UserId))
+            .ToList();
 
-        // First-ever event per user (across all of history) tells us who is "new" in the window.
-        var firstSeen = allEvents
-            .GroupBy(e => e.UserId)
-            .ToDictionary(g => g.Key, g => g.Min(e => e.Timestamp));
+        // First-ever activity per user (across all of history) tells us who is "new" in the window.
+        var firstSeen = activity
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.Min(a => a.Timestamp));
 
-        var winEvents = allEvents.Where(e => e.Timestamp >= start).ToList();
+        var winActivity = activity.Where(a => a.Timestamp >= start).ToList();
         var winSessions = sessions.Find(s => s.Started >= start).ToList();
 
-        var activeByDay = winEvents
-            .GroupBy(e => e.Timestamp.Date)
-            .ToDictionary(g => g.Key, g => g.Select(e => e.UserId).Distinct().Count());
+        var activeByDay = winActivity
+            .GroupBy(a => a.Timestamp.Date)
+            .ToDictionary(g => g.Key, g => g.Select(a => a.UserId).Distinct().Count());
         var newByDay = firstSeen
             .Where(kv => kv.Value >= start)
             .GroupBy(kv => kv.Value.Date)
@@ -206,12 +284,15 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
 
         var week = today.AddDays(-6);
 
+        // Device model is Sentry-only, so its distribution is computed from AppEvents in-window.
+        var winDeviceEvents = appEvents.Where(e => !string.IsNullOrEmpty(e.UserId) && e.Timestamp >= start).ToList();
+
         var data = new AnalyticsData
         {
             Days = days,
-            Mau = winEvents.Select(e => e.UserId).Distinct().Count(),
-            Wau = winEvents.Where(e => e.Timestamp >= week).Select(e => e.UserId).Distinct().Count(),
-            Dau = winEvents.Where(e => e.Timestamp >= today).Select(e => e.UserId).Distinct().Count(),
+            Mau = winActivity.Select(a => a.UserId).Distinct().Count(),
+            Wau = winActivity.Where(a => a.Timestamp >= week).Select(a => a.UserId).Distinct().Count(),
+            Dau = winActivity.Where(a => a.Timestamp >= today).Select(a => a.UserId).Distinct().Count(),
             NewUsers = firstSeen.Count(kv => kv.Value >= start),
             TotalSessions = winSessions.Count,
             AvgSessionSeconds = winSessions.Count > 0 ? winSessions.Average(s => s.Duration) : 0,
@@ -227,21 +308,21 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 Count = winSessions.Count(s => s.Started.Date == d),
             }).ToList(),
             DurationBuckets = BuildDurationBuckets(winSessions),
-            VersionDistribution = winEvents
-                .Where(e => !string.IsNullOrEmpty(e.Release))
-                .GroupBy(e => e.Release)
-                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(e => e.UserId).Distinct().Count() })
+            VersionDistribution = winActivity
+                .Where(a => !string.IsNullOrEmpty(a.Release))
+                .GroupBy(a => a.Release)
+                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(a => a.UserId).Distinct().Count() })
                 .OrderByDescending(c => c.Count)
                 .Take(10)
                 .ToList(),
-            OsDistribution = winEvents
-                .Where(e => !string.IsNullOrEmpty(e.Os))
-                .GroupBy(e => e.Os!)
-                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(e => e.UserId).Distinct().Count() })
+            OsDistribution = winActivity
+                .Where(a => !string.IsNullOrEmpty(a.Os))
+                .GroupBy(a => a.Os!)
+                .Select(g => new CountByKey { Key = g.Key, Count = g.Select(a => a.UserId).Distinct().Count() })
                 .OrderByDescending(c => c.Count)
                 .Take(10)
                 .ToList(),
-            DeviceDistribution = winEvents
+            DeviceDistribution = winDeviceEvents
                 .Where(e => !string.IsNullOrEmpty(e.DeviceModel))
                 .GroupBy(e => e.DeviceModel!)
                 .Select(g => new CountByKey { Key = g.Key, Count = g.Select(e => e.UserId).Distinct().Count() })

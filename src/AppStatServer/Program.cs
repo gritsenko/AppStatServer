@@ -139,8 +139,8 @@ api.MapGet("/event-groups", (IEventStorage es, string? release, string? os) => e
 api.MapGet("/crash-groups", (IEventStorage es, string? release, string? os) => es.GetEventGroupsAsync(true, release, os));
 api.MapGet("/facets", (IEventStorage es) => es.GetFacetsAsync());
 api.MapGet("/track-events", (IEventStorage es) => es.GetRecentTrackEventsAsync());
-api.MapGet("/events-report", (IEventStorage es, int? days) =>
-    es.GetEventReportAsync(days is >= 1 and <= 90 ? days.Value : 30));
+api.MapGet("/events-report", (IEventStorage es, int? days, string? release, string? os) =>
+    es.GetEventReportAsync(days is >= 1 and <= 90 ? days.Value : 30, release, os));
 api.MapGet("/diagnostics", (IEventStorage es, int? days, string? release) =>
     es.GetDiagnosticsAsync(days is >= 1 and <= 90 ? days.Value : 30, release));
 api.MapPost("/resolve", async (ResolveRequest req, IEventStorage es) =>
