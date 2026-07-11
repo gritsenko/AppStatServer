@@ -47,6 +47,7 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
 | GET    | `/api/diagnostics?days=&release=` | cookie | Crashes + handled errors: per-day series and grouped signatures with resolution state (days 1–90, optional version filter) |
 | POST   | `/api/resolve`       | cookie | Mark a crash/error group resolved or reopen it (`{ "key", "resolved" }`) |
 | GET    | `/api/facets`        | cookie | Distinct releases & OSes for the filter dropdowns |
+| POST   | `/mcp`               | bearer | MCP (Streamable HTTP) server for agents — disabled unless `Mcp__Token` is set |
 
 The dashboard is a single protected page with client-side routing
 (`#/overview`, `#/analytics`, `#/events`, `#/crashes`); its data comes from the
@@ -68,6 +69,45 @@ Auth__Password=your-strong-password
 The default in `appsettings.json` is `admin` / `changeme` so the app runs out of the
 box; the server logs a warning while the default password is in use. **Override
 `Auth__Password` before any real deployment.**
+
+## MCP server (fix crashes from your editor)
+
+The server can expose its live diagnostics to an MCP client (e.g. Claude Code) so an agent
+can pull the *actual* crashes and handled errors and fix them in the codebase. It is served
+over the Streamable HTTP transport at `POST /mcp` and reads the same data as the dashboard.
+
+It is **opt-in and guarded by a static bearer token** — the `/mcp` route is not mapped at all
+unless a token is configured:
+
+```bash
+Mcp__Token=a-long-random-secret
+```
+
+Tools:
+
+| Tool             | What it does |
+|------------------|--------------|
+| `list_diagnostics` | Open crash/error signatures ranked by occurrence count (filter by `days`, `release`, `kind`, `includeResolved`). |
+| `get_issue`        | Full detail of one signature by its `key`, including the stack trace of the latest occurrence. |
+| `resolve_issue`    | Mark a signature resolved (or reopen it) — it auto-reopens if the same crash recurs. |
+
+Point Claude Code at it with a `.mcp.json` (a template lives at the repo root — set the two
+env vars, don't commit the token):
+
+```json
+{
+  "mcpServers": {
+    "appstat": {
+      "type": "http",
+      "url": "${APPSTAT_MCP_URL}",
+      "headers": { "Authorization": "Bearer ${APPSTAT_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+Typical loop: `list_diagnostics` → `get_issue` on the worst one → fix the code → deploy →
+`resolve_issue`.
 
 ## Tech stack
 

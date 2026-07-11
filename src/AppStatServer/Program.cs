@@ -4,6 +4,7 @@ using System.Text;
 using AppStatServer;
 using AppStatServer.Auth;
 using AppStatServer.Data;
+using AppStatServer.Mcp;
 using AppStatServer.Sentry;
 using AppStatServer.Tracking;
 using Microsoft.AspNetCore.Authentication;
@@ -14,6 +15,15 @@ var builder = WebApplication.CreateSlimBuilder(args);
 
 var dbFileName = builder.Configuration["LiteDbFilePath"];
 builder.Services.AddSingleton<IEventStorage, LiteDbEventStorage>(_ => new LiteDbEventStorage(dbFileName));
+
+// MCP server: exposes the live crash/error diagnostics as tools over a Streamable HTTP
+// endpoint at /mcp, so an agent can pull actual issues and fix them. Stateless mode — the
+// tools are plain request/response, no server-to-client calls. The endpoint is only mapped
+// (below) when Mcp:Token is configured, and it is guarded by that bearer token.
+builder.Services
+    .AddMcpServer()
+    .WithHttpTransport(options => options.Stateless = true)
+    .WithTools<DiagnosticsTools>();
 
 // Cookie authentication protects the dashboard and the read API. The single set of
 // credentials comes from configuration (Auth:Username / Auth:Password), overridable
@@ -147,6 +157,41 @@ api.MapPost("/resolve", async (ResolveRequest req, IEventStorage es) =>
     string.IsNullOrEmpty(req.Key)
         ? Results.BadRequest(new { error = "key is required" })
         : Results.Ok(new { key = req.Key, resolved = await es.SetResolutionAsync(req.Key, req.Resolved) }));
+
+// --- MCP endpoint (bearer-protected) ---
+// Opt-in: only mapped when Mcp:Token (Mcp__Token) is set, so it is never exposed by accident.
+// The cookie login is a browser flow; agents present this static token instead.
+var mcpToken = app.Configuration["Mcp:Token"];
+if (!string.IsNullOrWhiteSpace(mcpToken))
+{
+    var mcpTokenBytes = Encoding.UTF8.GetBytes(mcpToken);
+    app.UseWhen(
+        ctx => ctx.Request.Path.StartsWithSegments("/mcp"),
+        branch => branch.Use(async (ctx, next) =>
+        {
+            const string prefix = "Bearer ";
+            var header = ctx.Request.Headers.Authorization.ToString();
+            var presented = header.StartsWith(prefix, StringComparison.Ordinal)
+                ? Encoding.UTF8.GetBytes(header[prefix.Length..])
+                : [];
+
+            if (!CryptographicOperations.FixedTimeEquals(presented, mcpTokenBytes))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
+            await next();
+        }));
+
+    app.MapMcp("/mcp");
+    app.Logger.LogInformation("MCP endpoint enabled at /mcp (bearer-protected).");
+}
+else
+{
+    app.Logger.LogInformation(
+        "MCP endpoint disabled. Set Mcp:Token (env Mcp__Token) to enable /mcp for agents.");
+}
 
 // --- Ingest (anonymous: SDKs authenticate with their DSN, not the dashboard cookie) ---
 _ = new EnvelopeHandler(app);

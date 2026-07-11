@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "appstat": {
+      "type": "http",
+      "url": "${APPSTAT_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${APPSTAT_MCP_TOKEN}"
+      }
+    }
+  }
+}
