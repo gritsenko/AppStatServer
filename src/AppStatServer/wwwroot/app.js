@@ -1022,6 +1022,100 @@ function pctClass(v) {
   return v >= 99 ? "pct-good" : v >= 95 ? "pct-warn" : "pct-bad";
 }
 
+// Assemble a self-contained, paste-into-an-agent report of a crash/error: all the
+// identifying metadata plus the stack trace (and the raw Sentry payload when present).
+function buildEventReport(ev, group) {
+  const kind = group?.kind === "crash" || ev.isCrash ? "Crash" : ev.isError ? "Error" : "Event";
+  const title = (group && group.title) || ev.message || "(no message)";
+  const lines = [`# ${kind}: ${title}`, ""];
+
+  const summary = [["Type", kind]];
+  if (ev.level) summary.push(["Level", ev.level]);
+  if (ev.message) summary.push(["Message", ev.message]);
+  if (group) {
+    if (group.count != null) summary.push(["Occurrences", String(group.count)]);
+    if (group.users != null) summary.push(["Affected users", String(group.users)]);
+    if (group.firstSeen) summary.push(["First seen", fmtTime(group.firstSeen)]);
+    if (group.lastSeen) summary.push(["Last seen", fmtTime(group.lastSeen)]);
+    if (group.resolved !== undefined)
+      summary.push([
+        "Status",
+        group.resolved ? "Resolved" + (group.resolvedAt ? " (" + fmtTime(group.resolvedAt) + ")" : "") : "Open",
+      ]);
+  }
+  const release = ev.release || (group && group.release);
+  if (release) summary.push(["Release", release]);
+  if (ev.os) summary.push(["OS", ev.os]);
+  if (ev.deviceModel) summary.push(["Device", ev.deviceModel]);
+  lines.push("## Summary", ...summary.map(([k, v]) => `- ${k}: ${v}`), "");
+
+  const meta = [];
+  if (ev.id) meta.push(["Id", ev.id]);
+  if (ev.timestamp) meta.push(["Time", fmtTime(ev.timestamp)]);
+  if (ev.userId) meta.push(["User", ev.userId]);
+  if (ev.sessionId) meta.push(["Session", ev.sessionId]);
+  if (ev.traceId) meta.push(["Trace", ev.traceId]);
+  if (ev.spanId) meta.push(["Span", ev.spanId]);
+  const flags = [ev.isCrash ? "crash" : null, ev.isError ? "error" : null].filter(Boolean).join(", ");
+  if (flags) meta.push(["Flags", flags]);
+  if (meta.length) lines.push("## Event", ...meta.map(([k, v]) => `- ${k}: ${v}`), "");
+
+  if (ev.stackTrace) lines.push("## Stack trace", "```", ev.stackTrace, "```", "");
+
+  // The flat events list keeps the raw Sentry payload; grouped samples trim it — include when present.
+  if (ev.eventEntry) {
+    let raw = ev.eventEntry;
+    try {
+      raw = JSON.stringify(JSON.parse(ev.eventEntry), null, 2);
+    } catch {
+      // not JSON — copy as-is
+    }
+    lines.push("## Raw event", "```json", raw, "```", "");
+  }
+
+  return lines.join("\n").trim() + "\n";
+}
+
+// Copy arbitrary text, with a fallback for non-secure contexts where the async
+// Clipboard API is unavailable. Returns whether the copy succeeded.
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// Show the "Copy for agent" action and wire it to a freshly built report for this event.
+function wireModalCopy(ev, group) {
+  const btn = document.getElementById("modal-copy");
+  btn.hidden = false;
+  btn.textContent = "Copy for agent";
+  btn.classList.remove("copied");
+  btn.onclick = async () => {
+    const ok = await copyToClipboard(buildEventReport(ev, group));
+    btn.textContent = ok ? "✓ Copied" : "Copy failed";
+    btn.classList.toggle("copied", ok);
+    setTimeout(() => {
+      btn.textContent = "Copy for agent";
+      btn.classList.remove("copied");
+    }, 1500);
+  };
+}
+
 function openEventModal(ev, group, onResolve) {
   modalTitle.innerHTML = `<span class="badge ${levelClass(ev.level)}">${escapeHtml(ev.level || "-")}</span> ${escapeHtml(ev.message)}`;
 
@@ -1075,6 +1169,7 @@ function openEventModal(ev, group, onResolve) {
     : '<p style="color:var(--muted)">No stack trace.</p>';
 
   modalBody.innerHTML = `<dl class="kv">${rows}</dl>${stack}`;
+  wireModalCopy(ev, group);
   modalBackdrop.classList.add("open");
 }
 
@@ -1083,6 +1178,11 @@ function openTrackEventModal(stat) {
   const resolveBtn = document.getElementById("modal-resolve");
   resolveBtn.hidden = true;
   resolveBtn.onclick = null;
+
+  // The agent-copy action is for crashes/errors only; custom events have no stack to fix.
+  const copyBtn = document.getElementById("modal-copy");
+  copyBtn.hidden = true;
+  copyBtn.onclick = null;
 
   modalTitle.innerHTML = `<span class="badge lvl-info">event</span> ${escapeHtml(stat.name)}`;
 

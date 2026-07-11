@@ -564,6 +564,11 @@ td.time, td.num { font-variant-numeric: tabular-nums; white-space: nowrap; color
   border-bottom: 1px solid var(--border);
 }
 .modal header h3 { margin: 0; font-size: 15px; flex: 1; }
+#modal-copy.copied {
+  background: var(--good);
+  border-color: var(--good);
+  color: #fff;
+}
 .modal .body { padding: 18px 20px; }
 .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; margin-bottom: 16px; }
 .kv dt { color: var(--muted); }
