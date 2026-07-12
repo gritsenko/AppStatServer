@@ -597,6 +597,50 @@ pre.stack {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
+/* ---------- Maintenance: system resources ---------- */
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-head .section-title { margin: 2px 0 10px; }
+.btn-sm { padding: 4px 12px; font-size: 12px; }
+
+.sys-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.sys-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+}
+.sys-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sys-label { color: var(--text-2); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.sys-val { font-size: 20px; font-weight: 650; white-space: nowrap; }
+.meter { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin: 12px 0 8px; }
+.meter-fill { height: 100%; border-radius: 999px; background: var(--good); transition: width 0.3s ease; }
+.meter-fill.warn { background: var(--warning); }
+.meter-fill.bad { background: var(--critical); }
+.meter-fill.neutral { background: var(--accent); }
+.sys-sub { color: var(--muted); font-size: 12px; }
+
+.sto-table { display: flex; flex-direction: column; }
+.sto-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 14px;
+  align-items: baseline;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--grid);
+}
+.sto-row:last-child { border-bottom: none; }
+.sto-name { font-weight: 550; }
+.sto-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.sto-bar { grid-column: 1 / -1; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.sto-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.sys-note { color: var(--muted); font-size: 12px; margin-top: 14px; word-break: break-all; }
+
 /* ---------- Maintenance ---------- */
 .dsn-hint code,
 .maint-desc code {

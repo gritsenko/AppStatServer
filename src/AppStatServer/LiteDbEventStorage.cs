@@ -9,15 +9,34 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
 {
     private readonly LiteDatabase _db;
 
+    // The on-disk path of the database, kept so the Maintenance page can report its size and
+    // the drive it lives on. Null for the in-memory (test) database, which has no file.
+    private readonly string? _dbFilePath;
+
+    // Friendly names for the collections shown on the Maintenance page's storage breakdown.
+    private static readonly Dictionary<string, string> CollectionLabels = new()
+    {
+        ["events"] = "Logs & crashes",
+        ["sessions"] = "Sessions",
+        ["trackevents"] = "Custom events",
+        ["resolutions"] = "Resolutions",
+    };
+
     public LiteDbEventStorage(string? dbFileName = "AppStat.db")
-        : this(new LiteDatabase(dbFileName ?? "AppStat.db"))
+        : this(new LiteDatabase(dbFileName ?? "AppStat.db"), dbFileName ?? "AppStat.db")
     {
     }
 
     // Allows injecting an in-memory LiteDatabase (e.g. new LiteDatabase(new MemoryStream())) for tests.
     public LiteDbEventStorage(LiteDatabase db)
+        : this(db, null)
+    {
+    }
+
+    private LiteDbEventStorage(LiteDatabase db, string? dbFilePath)
     {
         _db = db;
+        _dbFilePath = dbFilePath;
     }
 
     public Task SaveEventsAsync(IEnumerable<AppEvent> appEvents)
@@ -482,6 +501,47 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         if (resolved)
             col.Insert(new Resolution { Key = key, ResolvedAt = DateTime.Now });
         return Task.FromResult(resolved);
+    }
+
+    public Task<StorageInfo> GetStorageInfoAsync()
+    {
+        var info = new StorageInfo();
+
+        if (!string.IsNullOrEmpty(_dbFilePath))
+        {
+            var full = Path.GetFullPath(_dbFilePath);
+            info.DatabasePath = full;
+            if (File.Exists(full))
+                info.DatabaseFileBytes = new FileInfo(full).Length;
+        }
+
+        // Walk every collection actually present in the file (empty on a fresh DB) and sum the
+        // serialized size of its documents. GetBytesCount is the logical BSON size, so the
+        // per-collection totals come to less than the file — the difference is index and page
+        // overhead, which shows up as the gap between DataBytes and DatabaseFileBytes.
+        foreach (var name in _db.GetCollectionNames())
+        {
+            var col = _db.GetCollection(name);
+            long docs = 0, bytes = 0;
+            foreach (var doc in col.FindAll())
+            {
+                docs++;
+                bytes += BsonSerializer.Serialize(doc).Length;
+            }
+
+            info.Collections.Add(new CollectionInfo
+            {
+                Name = name,
+                Label = CollectionLabels.TryGetValue(name, out var label) ? label : name,
+                Documents = docs,
+                Bytes = bytes,
+            });
+            info.DataBytes += bytes;
+        }
+
+        info.Collections = info.Collections.OrderByDescending(c => c.Bytes).ToList();
+
+        return Task.FromResult(info);
     }
 
     private static List<CountByKey> BuildDurationBuckets(List<AppSession> sessions)

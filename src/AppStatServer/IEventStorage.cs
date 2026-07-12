@@ -33,4 +33,8 @@ public interface IEventStorage
 
     // Mark a crash/error group (by its DiagnosticGroup.Key) resolved or reopen it.
     Task<bool> SetResolutionAsync(string key, bool resolved);
+
+    // Storage our own data consumes: the database file size on disk plus a per-collection
+    // (logs/crashes, sessions, custom events) breakdown of document counts and logical bytes.
+    Task<StorageInfo> GetStorageInfoAsync();
 }

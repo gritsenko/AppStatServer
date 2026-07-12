@@ -37,6 +37,19 @@ function shortId(id) {
   return s.length > 12 ? s.slice(0, 8) + "…" : s;
 }
 
+// Human-readable byte size: 0 → "0 B", 1536 → "1.5 KB", 1.5e9 → "1.4 GB".
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  const digits = i === 0 ? 0 : n >= 100 ? 0 : n >= 10 ? 1 : 2;
+  return n.toFixed(digits) + " " + units[i];
+}
+
 function timeAgo(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return "";

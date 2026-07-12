@@ -158,6 +158,19 @@ api.MapPost("/resolve", async (ResolveRequest req, IEventStorage es) =>
         ? Results.BadRequest(new { error = "key is required" })
         : Results.Ok(new { key = req.Key, resolved = await es.SetResolutionAsync(req.Key, req.Resolved) }));
 
+// Host resources for the Maintenance page: free disk/RAM, this process's footprint, and the
+// storage our own data consumes. The disk probe targets the drive the database lives on.
+api.MapGet("/system", async (IEventStorage es) =>
+{
+    var storage = await es.GetStorageInfoAsync();
+    return new SystemInfo
+    {
+        Storage = storage,
+        Disk = SystemMetrics.GetDisk(storage.DatabasePath),
+        Memory = SystemMetrics.GetMemory(),
+    };
+});
+
 // --- MCP endpoint (bearer-protected) ---
 // Opt-in: only mapped when Mcp:Token (Mcp__Token) is set, so it is never exposed by accident.
 // The cookie login is a browser flow; agents present this static token instead.

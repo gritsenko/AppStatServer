@@ -812,8 +812,13 @@ async function renderMaintenance() {
   view.innerHTML = `
     <div class="page-head">
       <h1>Maintenance</h1>
-      <span class="page-sub">Send synthetic data to the live ingest endpoints and verify it lands</span>
+      <span class="page-sub">Host resources and synthetic-data self-test</span>
     </div>
+    <div class="section-head">
+      <h2 class="section-title">System resources</h2>
+      <button id="sys-refresh" type="button" class="btn-sm">Refresh</button>
+    </div>
+    <div id="sys-host"><div class="empty">Loading system info…</div></div>
     <section class="dsn-panel">
       <div class="dsn-info">
         <span class="dsn-label">Self-test</span>
@@ -860,7 +865,108 @@ async function renderMaintenance() {
     btn.addEventListener("click", () => maintSend(btn.dataset.action, btn));
   });
 
+  document.getElementById("sys-refresh").addEventListener("click", () => loadSystemInfo());
+  loadSystemInfo();
+
   drawMaintLog();
+}
+
+// Fetch and render the host-resource panel. Kept out of the SPA cache so Refresh always
+// reflects the live disk/RAM/storage picture.
+async function loadSystemInfo() {
+  const host = document.getElementById("sys-host");
+  if (!host) return;
+  try {
+    const s = await fetchJson("/api/system");
+    host.innerHTML = drawSystemInfo(s);
+  } catch {
+    host.innerHTML = '<div class="empty">Failed to load system info.</div>';
+  }
+}
+
+function drawSystemInfo(s) {
+  const disk = s.disk || {};
+  const mem = s.memory || {};
+  const sto = s.storage || {};
+
+  const diskCard = meterCard("Disk", disk.freeBytes, disk.totalBytes, {
+    valueText: fmtBytes(disk.freeBytes) + " free",
+    sub: `${fmtBytes(disk.usedBytes)} of ${fmtBytes(disk.totalBytes)} used${disk.drive ? " · " + escapeHtml(disk.drive) : ""}`,
+    // For disk/RAM the meter tracks *used*, so a full bar (little free) is the warning.
+    fillBytes: disk.usedBytes,
+  });
+
+  const ramCard = meterCard("Memory (RAM)", mem.freeBytes, mem.totalBytes, {
+    valueText: fmtBytes(mem.freeBytes) + " free",
+    sub: `${fmtBytes(mem.usedBytes)} of ${fmtBytes(mem.totalBytes)} used`,
+    fillBytes: mem.usedBytes,
+  });
+
+  const procCard = meterCard("This process", mem.processWorkingSetBytes, mem.totalBytes, {
+    valueText: fmtBytes(mem.processWorkingSetBytes),
+    sub: `managed heap ${fmtBytes(mem.processManagedHeapBytes)} · ${pctText(mem.processWorkingSetBytes, mem.totalBytes)} of RAM`,
+    fillBytes: mem.processWorkingSetBytes,
+  });
+
+  // The database file is our storage footprint; the fill shows how much of it is live data
+  // (the rest is index and free-page overhead reclaimed on compaction).
+  const dataCard = meterCard("Our data", sto.dataBytes, sto.databaseFileBytes, {
+    valueText: fmtBytes(sto.databaseFileBytes),
+    sub: `${fmtBytes(sto.dataBytes)} live${disk.totalBytes ? " · " + pctText(sto.databaseFileBytes, disk.totalBytes) + " of disk" : ""}`,
+    fillBytes: sto.dataBytes,
+    neutral: true,
+  });
+
+  const cards = `<section class="sys-grid">${diskCard}${ramCard}${procCard}${dataCard}</section>`;
+
+  const cols = (sto.collections || []).filter((c) => c.documents > 0);
+  const maxBytes = cols.reduce((m, c) => Math.max(m, c.bytes), 0) || 1;
+  const rows = cols.length
+    ? cols
+        .map(
+          (c) => `
+      <div class="sto-row">
+        <span class="sto-name">${escapeHtml(c.label || c.name)}</span>
+        <span class="sto-meta">${fmtNum(c.documents)} ${c.documents === 1 ? "record" : "records"} · ${fmtBytes(c.bytes)}</span>
+        <div class="sto-bar"><div class="sto-bar-fill" style="width:${((c.bytes / maxBytes) * 100).toFixed(1)}%"></div></div>
+      </div>`
+        )
+        .join("")
+    : '<div class="empty">No stored data yet.</div>';
+
+  const note = sto.databasePath
+    ? `<div class="sys-note">Database file: <span class="mono">${escapeHtml(sto.databasePath)}</span></div>`
+    : "";
+
+  return `${cards}
+    <section class="panel wide">
+      <h2>Storage by data type</h2>
+      <div class="sto-table">${rows}</div>
+      ${note}
+    </section>`;
+}
+
+// A resource tile: big value, a used/total meter, and a sub-line. `fillBytes` is what the
+// bar tracks (defaults to `used`); `neutral` keeps the bar accent-coloured instead of
+// switching to warning/critical as it fills.
+function meterCard(label, used, total, opts = {}) {
+  const fill = opts.fillBytes != null ? opts.fillBytes : used;
+  const pct = total > 0 ? Math.min(100, Math.max(0, (fill / total) * 100)) : 0;
+  const cls = opts.neutral ? "neutral" : pct >= 90 ? "bad" : pct >= 75 ? "warn" : "good";
+  const value = opts.valueText != null ? opts.valueText : fmtBytes(used);
+  const sub = opts.sub ? `<div class="sys-sub">${opts.sub}</div>` : "";
+  return `
+    <div class="sys-card">
+      <div class="sys-head"><span class="sys-label">${escapeHtml(label)}</span><span class="sys-val">${escapeHtml(value)}</span></div>
+      <div class="meter"><div class="meter-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
+      ${sub}
+    </div>`;
+}
+
+function pctText(part, whole) {
+  if (!whole) return "0%";
+  const p = (part / whole) * 100;
+  return (p < 0.1 ? "<0.1" : p < 10 ? p.toFixed(1) : Math.round(p)) + "%";
 }
 
 async function maintSend(action, btn) {
