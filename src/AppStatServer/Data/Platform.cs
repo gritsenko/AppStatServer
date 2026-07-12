@@ -15,8 +15,16 @@ public static class Platform
 
         // A browser user-agent (web build) embeds "Windows NT" / "Linux" substrings of its
         // own, so recognise the UA shape first and bucket it as Web before the OS keywords.
+        // The Browser/WASM .NET head has no user-agent to report and instead sends its runtime
+        // OS — RuntimeInformation.OSDescription is "Browser" there — so treat that, the
+        // wasm/emscripten runtime tokens, and a literal "Web" as Web too. None of these appear
+        // in a native OS string, so matching them here (before the OS keywords) is safe.
         if (os.Contains("Mozilla/", StringComparison.OrdinalIgnoreCase) ||
-            os.Contains("AppleWebKit", StringComparison.OrdinalIgnoreCase))
+            os.Contains("AppleWebKit", StringComparison.OrdinalIgnoreCase) ||
+            os.Contains("Browser", StringComparison.OrdinalIgnoreCase) ||
+            os.Contains("Emscripten", StringComparison.OrdinalIgnoreCase) ||
+            os.Contains("wasm", StringComparison.OrdinalIgnoreCase) ||
+            os.Equals("Web", StringComparison.OrdinalIgnoreCase))
             return "Web";
 
         if (os.Contains("Android", StringComparison.OrdinalIgnoreCase))

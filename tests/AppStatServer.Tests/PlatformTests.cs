@@ -13,6 +13,11 @@ public class PlatformTests
     // A browser user-agent embeds "Windows NT" itself, so it must bucket as Web, not Windows.
     [Arguments("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36", "Web")]
     [Arguments("Mozilla/5.0 (X11; Linux x86_64)", "Web")]
+    // The WASM head reports its runtime OS (RuntimeInformation.OSDescription = "Browser"), not a
+    // user-agent; that and the wasm/emscripten tokens and a literal "Web" all bucket as Web.
+    [Arguments("Browser", "Web")]
+    [Arguments("Emscripten", "Web")]
+    [Arguments("Web", "Web")]
     public async Task Categorizes_raw_os_into_platform_bucket(string os, string expected)
     {
         await Assert.That(Platform.Categorize(os)).IsEqualTo(expected);
