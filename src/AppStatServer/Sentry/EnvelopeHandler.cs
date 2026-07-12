@@ -4,7 +4,7 @@ namespace AppStatServer.Sentry;
 
 public class EnvelopeHandler
 {
-    public EnvelopeHandler(WebApplication app)
+    public EnvelopeHandler(WebApplication app, string corsPolicy)
     {
         app.MapPost("/api/1/envelope", async (HttpRequest request, IEventStorage eventStorage) =>
         {
@@ -18,7 +18,7 @@ public class EnvelopeHandler
                 await eventStorage.SaveSessionsAsync(parsed.Sessions);
 
             return new EnvelopeResponse { Id = parsed.LastId };
-        });
+        }).RequireCors(corsPolicy);
     }
 
     private static async Task<string> ReadBodyAsync(HttpRequest request)

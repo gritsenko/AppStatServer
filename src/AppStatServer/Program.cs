@@ -16,6 +16,32 @@ var builder = WebApplication.CreateSlimBuilder(args);
 var dbFileName = builder.Configuration["LiteDbFilePath"];
 builder.Services.AddSingleton<IEventStorage, LiteDbEventStorage>(_ => new LiteDbEventStorage(dbFileName));
 
+// CORS for the anonymous ingest endpoints. A browser app that sends events from another
+// origin (e.g. the web build at https://app.pix2d.com) issues a preflight OPTIONS before the
+// POST; with no CORS policy that preflight matches no route, returns 405, and the browser
+// reports a "CORS error" and drops the request. The dashboard and read API are same-origin
+// and cookie-based, so they need no CORS and this policy is applied only to the ingest routes.
+//
+// Allowed origins come from Cors:AllowedOrigins — a JSON array in appsettings, or a
+// comma/semicolon/space-separated list via the Cors__AllowedOrigins env var. When none are
+// configured any origin is allowed: ingest is anonymous and identified by the DSN, not a
+// cookie, so this is safe and mirrors how a Sentry relay accepts browser events.
+const string ingestCorsPolicy = "ingest";
+var allowedOrigins =
+    builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? builder.Configuration["Cors:AllowedOrigins"]?
+        .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    ?? [];
+builder.Services.AddCors(options => options.AddPolicy(ingestCorsPolicy, policy =>
+{
+    if (allowedOrigins.Length > 0)
+        policy.WithOrigins(allowedOrigins);
+    else
+        policy.AllowAnyOrigin();
+
+    policy.AllowAnyHeader().AllowAnyMethod();
+}));
+
 // MCP server: exposes the live crash/error diagnostics as tools over a Streamable HTTP
 // endpoint at /mcp, so an agent can pull actual issues and fix them. Stateless mode — the
 // tools are plain request/response, no server-to-client calls. The endpoint is only mapped
@@ -69,6 +95,7 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 app.UseStaticFiles();
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -207,10 +234,11 @@ else
 }
 
 // --- Ingest (anonymous: SDKs authenticate with their DSN, not the dashboard cookie) ---
-_ = new EnvelopeHandler(app);
+// Both ingest routes opt into the CORS policy so browser SDKs on other origins can post to them.
+_ = new EnvelopeHandler(app, ingestCorsPolicy);
 
 // Custom product-analytics events (POST /api/track), separate from the Sentry crash/error path.
-_ = new TrackEventHandler(app);
+_ = new TrackEventHandler(app, ingestCorsPolicy);
 
 app.Run();
 

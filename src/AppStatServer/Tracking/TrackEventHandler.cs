@@ -6,7 +6,7 @@ namespace AppStatServer.Tracking;
 // route: clients post directly, they don't carry the dashboard auth cookie.
 public class TrackEventHandler
 {
-    public TrackEventHandler(WebApplication app)
+    public TrackEventHandler(WebApplication app, string corsPolicy)
     {
         app.MapPost("/api/track", async (HttpRequest request, IEventStorage eventStorage) =>
         {
@@ -17,7 +17,7 @@ public class TrackEventHandler
                 await eventStorage.SaveTrackEventsAsync(events);
 
             return Results.Ok(new { accepted = events.Count });
-        });
+        }).RequireCors(corsPolicy);
     }
 
     private static async Task<string> ReadBodyAsync(HttpRequest request)
