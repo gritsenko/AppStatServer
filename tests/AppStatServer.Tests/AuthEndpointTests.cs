@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 using AppStatServer;
 using LiteDB;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -13,13 +14,15 @@ namespace AppStatServer.Tests;
 // stays open for SDKs, and valid credentials unlock the dashboard API.
 public class AuthEndpointTests
 {
-    private static WebApplicationFactory<Program> CreateFactory()
+    private static WebApplicationFactory<Program> CreateFactory(string? mcpToken = null)
     {
         var db = new LiteDatabase(new MemoryStream());
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Auth:Username", "tester");
             builder.UseSetting("Auth:Password", "test-pass");
+            if (mcpToken is not null)
+                builder.UseSetting("Mcp:Token", mcpToken);
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IEventStorage>();
@@ -106,5 +109,48 @@ public class AuthEndpointTests
         var res = await client.GetAsync("/api/analytics");
 
         await Assert.That(res.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+    }
+
+    [Test]
+    public async Task Mcp_info_requires_authentication()
+    {
+        await using var factory = CreateFactory(mcpToken: "secret-token");
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var res = await client.GetAsync("/api/mcp-info");
+
+        await Assert.That(res.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+    }
+
+    [Test]
+    public async Task Mcp_info_reports_disabled_when_no_token()
+    {
+        await using var factory = CreateFactory();
+        using var client = factory.CreateClient();
+
+        var login = await client.PostAsJsonAsync("/login", new { username = "tester", password = "test-pass" });
+        login.EnsureSuccessStatusCode();
+
+        var info = await client.GetFromJsonAsync<JsonElement>("/api/mcp-info");
+
+        await Assert.That(info.GetProperty("enabled").GetBoolean()).IsFalse();
+        await Assert.That(info.GetProperty("token").GetString()).IsEqualTo("");
+        await Assert.That(info.GetProperty("url").GetString()!).EndsWith("/mcp");
+    }
+
+    [Test]
+    public async Task Mcp_info_returns_token_and_url_when_enabled()
+    {
+        await using var factory = CreateFactory(mcpToken: "secret-token");
+        using var client = factory.CreateClient();
+
+        var login = await client.PostAsJsonAsync("/login", new { username = "tester", password = "test-pass" });
+        login.EnsureSuccessStatusCode();
+
+        var info = await client.GetFromJsonAsync<JsonElement>("/api/mcp-info");
+
+        await Assert.That(info.GetProperty("enabled").GetBoolean()).IsTrue();
+        await Assert.That(info.GetProperty("token").GetString()).IsEqualTo("secret-token");
+        await Assert.That(info.GetProperty("url").GetString()!).EndsWith("/mcp");
     }
 }

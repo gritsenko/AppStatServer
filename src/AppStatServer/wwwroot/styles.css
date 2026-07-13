@@ -597,6 +597,90 @@ pre.stack {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
+/* ---------- Connect MCP ---------- */
+.mcp-connect {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  padding: 6px 12px;
+}
+.mcp-connect-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.mcp-intro { margin: 0 0 18px; color: var(--text-2); font-size: 13px; line-height: 1.5; }
+.mcp-field { margin-bottom: 16px; }
+.mcp-field > label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.mcp-field > label code { text-transform: none; letter-spacing: 0; }
+.mcp-copy-row { display: flex; align-items: stretch; gap: 8px; }
+.mcp-copy-row code {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+}
+.mcp-copy-row button { white-space: nowrap; }
+.mcp-secret { -webkit-text-security: disc; text-security: disc; }
+.mcp-config {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 8px;
+  overflow-x: auto;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+.mcp-note {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.mcp-foot { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.mcp-intro code, .mcp-note code, .mcp-foot code, .mcp-field > label code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.mcp-copy-row button.copied, .mcp-field button.copied {
+  background: var(--good);
+  border-color: var(--good);
+  color: #fff;
+}
+
 /* ---------- Maintenance: system resources ---------- */
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-head .section-title { margin: 2px 0 10px; }

@@ -546,6 +546,9 @@ async function renderDiagnostics() {
     <div class="page-head">
       <h1>Crashes &amp; errors</h1>
       <span class="page-sub" id="diag-sub"></span>
+      <button class="mcp-connect" id="diag-connect-mcp" type="button" title="Let an AI agent read these crashes live via MCP">
+        <span class="mcp-connect-dot"></span>Connect MCP
+      </button>
     </div>
     <div class="toolbar">
       <div class="range">
@@ -583,6 +586,7 @@ async function renderDiagnostics() {
   document.querySelectorAll(".range-btn").forEach((b) => {
     b.addEventListener("click", () => { diagnostics.days = Number(b.dataset.days); renderDiagnostics(); });
   });
+  document.getElementById("diag-connect-mcp").addEventListener("click", openMcpModal);
 
   let report = null;
   await load();
@@ -1205,6 +1209,21 @@ async function copyToClipboard(text) {
   }
 }
 
+// Wire a button to copy a fixed string, with the shared "✓ Copied" feedback for 1.5s.
+function wireCopyBtn(btn, text) {
+  if (!btn) return;
+  const original = btn.textContent;
+  btn.onclick = async () => {
+    const ok = await copyToClipboard(text);
+    btn.textContent = ok ? "✓ Copied" : "Copy failed";
+    btn.classList.toggle("copied", ok);
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.classList.remove("copied");
+    }, 1500);
+  };
+}
+
 // Show the "Copy for agent" action and wire it to a freshly built report for this event.
 function wireModalCopy(ev, group) {
   const btn = document.getElementById("modal-copy");
@@ -1313,6 +1332,89 @@ function openTrackEventModal(stat) {
   props.forEach((p, i) => renderHBars(blocks[i], (p.values || []).map((v) => ({ key: v.key, count: v.count }))));
 
   modalBackdrop.classList.add("open");
+}
+
+// Connection details for the MCP endpoint so an agent can read live crashes/errors.
+async function openMcpModal() {
+  // The copy/resolve actions belong to the event modal — hide them for this dialog.
+  const copyBtn = document.getElementById("modal-copy");
+  copyBtn.hidden = true;
+  copyBtn.onclick = null;
+  const resolveBtn = document.getElementById("modal-resolve");
+  resolveBtn.hidden = true;
+  resolveBtn.onclick = null;
+
+  modalTitle.textContent = "Connect MCP";
+  modalBody.innerHTML = `<p class="mcp-intro">Loading…</p>`;
+  modalBackdrop.classList.add("open");
+
+  let info;
+  try {
+    if (!cache.mcpInfo) cache.mcpInfo = await fetchJson("/api/mcp-info");
+    info = cache.mcpInfo;
+  } catch {
+    modalBody.innerHTML = `<p class="mcp-intro">Couldn't load MCP connection details. Try Refresh.</p>`;
+    return;
+  }
+
+  const intro = `<p class="mcp-intro">Let an AI agent (Claude Code, Cursor, …) read this server's live crashes and errors — the same data you see here — and fix them in your codebase.</p>`;
+
+  if (!info.enabled) {
+    modalBody.innerHTML = `${intro}
+      <div class="mcp-note">
+        The MCP endpoint is <strong>disabled</strong>. Set the <code>Mcp__Token</code> environment
+        variable on the server to a long random secret and restart to enable it.
+      </div>`;
+    return;
+  }
+
+  const configJson = JSON.stringify(
+    {
+      mcpServers: {
+        appstat: {
+          type: "http",
+          url: info.url,
+          headers: { Authorization: `Bearer ${info.token}` },
+        },
+      },
+    },
+    null,
+    2
+  );
+
+  modalBody.innerHTML = `${intro}
+    <div class="mcp-field">
+      <label>Endpoint URL</label>
+      <div class="mcp-copy-row">
+        <code>${escapeHtml(info.url)}</code>
+        <button id="mcp-copy-url" type="button">Copy</button>
+      </div>
+    </div>
+    <div class="mcp-field">
+      <label>Access token</label>
+      <div class="mcp-copy-row">
+        <code id="mcp-token" class="mcp-secret">${escapeHtml(info.token)}</code>
+        <button id="mcp-reveal" type="button">Show</button>
+        <button id="mcp-copy-token" class="primary" type="button">Copy token</button>
+      </div>
+    </div>
+    <div class="mcp-field">
+      <label>Or drop this into your <code>.mcp.json</code></label>
+      <pre class="mcp-config">${escapeHtml(configJson)}</pre>
+      <button id="mcp-copy-config" type="button">Copy config</button>
+    </div>
+    <p class="mcp-foot">Typical loop: <code>list_diagnostics</code> → <code>get_issue</code> → fix the code → <code>resolve_issue</code>.</p>`;
+
+  wireCopyBtn(document.getElementById("mcp-copy-url"), info.url);
+  wireCopyBtn(document.getElementById("mcp-copy-token"), info.token);
+  wireCopyBtn(document.getElementById("mcp-copy-config"), configJson);
+
+  const tokenEl = document.getElementById("mcp-token");
+  const revealBtn = document.getElementById("mcp-reveal");
+  revealBtn.onclick = () => {
+    const masked = tokenEl.classList.toggle("mcp-secret");
+    revealBtn.textContent = masked ? "Show" : "Hide";
+  };
 }
 
 function closeModal() {

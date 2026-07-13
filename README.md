@@ -91,6 +91,9 @@ Tools:
 | `get_issue`        | Full detail of one signature by its `key`, including the stack trace of the latest occurrence. |
 | `resolve_issue`    | Mark a signature resolved (or reopen it) — it auto-reopens if the same crash recurs. |
 
+The dashboard's **Crashes** page has a **Connect MCP** button that shows the endpoint URL,
+the access token, and a ready-to-paste `.mcp.json` for whatever host you reached it on.
+
 Point Claude Code at it with a `.mcp.json` (a template lives at the repo root — set the two
 env vars, don't commit the token):
 

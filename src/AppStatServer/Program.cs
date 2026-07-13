@@ -163,6 +163,15 @@ api.MapGet("/dsn", (HttpContext http) =>
 
     return Results.Ok(new { dsn = $"{scheme}://{sentryPublicKey}@{authority}/1" });
 });
+// Connection details for the MCP endpoint, surfaced in the dashboard's "Connect MCP" dialog.
+// Only reachable by an authenticated dashboard user, so it may hand back the bearer token.
+api.MapGet("/mcp-info", (HttpContext http, IConfiguration config) =>
+{
+    var token = config["Mcp:Token"];
+    var enabled = !string.IsNullOrWhiteSpace(token);
+    var url = $"{http.Request.Scheme}://{http.Request.Host.Value}/mcp";
+    return Results.Ok(new { enabled, url, token = enabled ? token : "" });
+});
 api.MapGet("/events", (IEventStorage es) => es.GetRecentEventsAsync());
 api.MapGet("/events/{id}", async (string id, IEventStorage es) =>
     (await es.GetRecentEventsAsync()).FirstOrDefault(a => a.Id == id) is { } ev
