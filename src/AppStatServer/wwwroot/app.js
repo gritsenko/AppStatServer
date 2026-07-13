@@ -1393,8 +1393,7 @@ async function openMcpModal() {
     <div class="mcp-field">
       <label>Access token</label>
       <div class="mcp-copy-row">
-        <code id="mcp-token" class="mcp-secret">${escapeHtml(info.token)}</code>
-        <button id="mcp-reveal" type="button">Show</button>
+        <code>${escapeHtml(info.token)}</code>
         <button id="mcp-copy-token" class="primary" type="button">Copy token</button>
       </div>
     </div>
@@ -1408,13 +1407,6 @@ async function openMcpModal() {
   wireCopyBtn(document.getElementById("mcp-copy-url"), info.url);
   wireCopyBtn(document.getElementById("mcp-copy-token"), info.token);
   wireCopyBtn(document.getElementById("mcp-copy-config"), configJson);
-
-  const tokenEl = document.getElementById("mcp-token");
-  const revealBtn = document.getElementById("mcp-reveal");
-  revealBtn.onclick = () => {
-    const masked = tokenEl.classList.toggle("mcp-secret");
-    revealBtn.textContent = masked ? "Show" : "Hide";
-  };
 }
 
 function closeModal() {

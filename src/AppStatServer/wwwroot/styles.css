@@ -644,7 +644,6 @@ pre.stack {
   user-select: all;
 }
 .mcp-copy-row button { white-space: nowrap; }
-.mcp-secret { -webkit-text-security: disc; text-security: disc; }
 .mcp-config {
   background: var(--surface-2);
   border: 1px solid var(--border);
