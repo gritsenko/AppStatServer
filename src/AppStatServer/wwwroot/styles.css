@@ -558,12 +558,20 @@ td.time, td.num { font-variant-numeric: tabular-nums; white-space: nowrap; color
 }
 .modal header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
 }
-.modal header h3 { margin: 0; font-size: 15px; flex: 1; }
+.modal header h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.modal header button { flex-shrink: 0; }
 #modal-copy.copied {
   background: var(--good);
   border-color: var(--good);
