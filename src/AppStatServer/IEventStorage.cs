@@ -18,6 +18,15 @@ public interface IEventStorage
 
     Task<AnalyticsData> GetAnalyticsAsync(int days);
 
+    // Weekly cohort retention plus classic D1/D7/D30 return rates.
+    Task<RetentionData> GetRetentionAsync(int weeks);
+
+    // Saved conversion funnels (ordered lists of custom-event names) and their reports.
+    Task<ImmutableList<Funnel>> GetFunnelsAsync();
+    Task<Funnel> SaveFunnelAsync(Funnel funnel);
+    Task<bool> DeleteFunnelAsync(string id);
+    Task<FunnelReport?> GetFunnelReportAsync(string id, int days);
+
     // crashesOnly=true groups only crashes; false groups all non-crash events.
     // Optional release/os narrow the events before grouping.
     Task<ImmutableList<EventGroup>> GetEventGroupsAsync(bool crashesOnly, string? release = null, string? os = null);
@@ -37,4 +46,13 @@ public interface IEventStorage
     // Storage our own data consumes: the database file size on disk plus a per-collection
     // (logs/crashes, sessions, custom events) breakdown of document counts and logical bytes.
     Task<StorageInfo> GetStorageInfoAsync();
+
+    // What PurgeAsync would remove — counts and logical bytes — without deleting anything.
+    Task<PurgeResult> EstimatePurgeAsync(int olderThanDays);
+
+    // Delete raw records (events, sessions, custom events) older than the cutoff.
+    Task<PurgeResult> PurgeAsync(int olderThanDays);
+
+    // Rebuild the database file so pages freed by purges are returned to the OS.
+    Task<CompactResult> CompactAsync();
 }

@@ -20,6 +20,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         ["sessions"] = "Sessions",
         ["trackevents"] = "Custom events",
         ["resolutions"] = "Resolutions",
+        ["funnels"] = "Funnels",
     };
 
     public LiteDbEventStorage(string? dbFileName = "AppStat.db")
@@ -33,10 +34,27 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
     {
     }
 
+    // BsonMapper publishes an entity's mapper into its dictionary *before* filling in the
+    // members (to allow cycles), so two threads first-touching the same type concurrently can
+    // observe a half-built mapper — symptoms like "Member Id not found on BsonMapper". All
+    // LiteDatabase instances share BsonMapper.Global by default, so warm every entity type
+    // once, serialized by a process-wide lock, before the storage takes any traffic.
+    private static readonly object MapperWarmupLock = new();
+
     private LiteDbEventStorage(LiteDatabase db, string? dbFilePath)
     {
         _db = db;
         _dbFilePath = dbFilePath;
+
+        lock (MapperWarmupLock)
+        {
+            // ToDocument fully builds and caches the entity mapper for each type.
+            _ = _db.Mapper.ToDocument(new AppEvent());
+            _ = _db.Mapper.ToDocument(new AppSession());
+            _ = _db.Mapper.ToDocument(new TrackEvent());
+            _ = _db.Mapper.ToDocument(new Funnel());
+            _ = _db.Mapper.ToDocument(new Resolution());
+        }
     }
 
     public Task SaveEventsAsync(IEnumerable<AppEvent> appEvents)
@@ -355,6 +373,156 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         return Task.FromResult(data);
     }
 
+    public Task<RetentionData> GetRetentionAsync(int weeks)
+    {
+        var events = _db.GetCollection<AppEvent>("events");
+        var trackEvents = _db.GetCollection<TrackEvent>("trackevents");
+
+        // Same activity signal as GetAnalyticsAsync: any user-attributed event counts, so a
+        // user who never crashes still counts as retained.
+        var activity = events.FindAll()
+            .Select(e => (e.UserId, e.Timestamp))
+            .Concat(trackEvents.FindAll().Select(t => (t.UserId, t.Timestamp)))
+            .Where(a => !string.IsNullOrEmpty(a.UserId))
+            .ToList();
+
+        // Per-user set of distinct active days — everything below reads from this.
+        var daysByUser = activity
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.Select(a => a.Timestamp.Date).ToHashSet());
+
+        var today = DateTime.Now.Date;
+
+        // Weekly cohorts, anchored on Mondays, oldest first, current week last.
+        var thisWeek = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+        var firstCohortWeek = thisWeek.AddDays(-7 * (weeks - 1));
+
+        var cohorts = new List<CohortRow>();
+        for (var w = 0; w < weeks; w++)
+        {
+            var weekStart = firstCohortWeek.AddDays(7 * w);
+            var weekEnd = weekStart.AddDays(7);
+            var cohortUsers = daysByUser
+                .Where(kv => kv.Value.Min() >= weekStart && kv.Value.Min() < weekEnd)
+                .Select(kv => kv.Key)
+                .ToList();
+
+            var row = new CohortRow { Week = weekStart.ToString("yyyy-MM-dd"), Size = cohortUsers.Count };
+            for (var k = 0; weekStart.AddDays(7 * k) <= thisWeek; k++)
+            {
+                var from = weekStart.AddDays(7 * k);
+                var to = from.AddDays(7);
+                row.Values.Add(cohortUsers.Count == 0
+                    ? null
+                    : Math.Round(100.0 * cohortUsers.Count(u => daysByUser[u].Any(d => d >= from && d < to)) / cohortUsers.Count, 1));
+            }
+
+            cohorts.Add(row);
+        }
+
+        var data = new RetentionData
+        {
+            Weeks = weeks,
+            Cohorts = cohorts,
+            D1 = DayNRetention(daysByUser, today, 1),
+            D7 = DayNRetention(daysByUser, today, 7),
+            D30 = DayNRetention(daysByUser, today, 30),
+        };
+
+        return Task.FromResult(data);
+    }
+
+    // Classic day-N retention: of users whose first day is at least n days old, the share
+    // active again exactly on day first+n. Bounded to first-seen within the last 90 days so
+    // the figure reflects the current product, not all of history.
+    private static RetentionPoint DayNRetention(Dictionary<string, HashSet<DateTime>> daysByUser, DateTime today, int n)
+    {
+        var lookbackStart = today.AddDays(-90);
+        var eligible = daysByUser
+            .Select(kv => (Days: kv.Value, First: kv.Value.Min()))
+            .Where(u => u.First >= lookbackStart && u.First <= today.AddDays(-n))
+            .ToList();
+        var retained = eligible.Count(u => u.Days.Contains(u.First.AddDays(n)));
+
+        return new RetentionPoint
+        {
+            Eligible = eligible.Count,
+            Retained = retained,
+            Pct = eligible.Count > 0 ? Math.Round(100.0 * retained / eligible.Count, 1) : null,
+        };
+    }
+
+    public Task<ImmutableList<Funnel>> GetFunnelsAsync()
+    {
+        var col = _db.GetCollection<Funnel>("funnels");
+        return Task.FromResult(col.FindAll().OrderBy(f => f.CreatedAt).ToImmutableList());
+    }
+
+    public Task<Funnel> SaveFunnelAsync(Funnel funnel)
+    {
+        if (string.IsNullOrEmpty(funnel.Id))
+            funnel.Id = Guid.NewGuid().ToString();
+        _db.GetCollection<Funnel>("funnels").Upsert(funnel);
+        return Task.FromResult(funnel);
+    }
+
+    public Task<bool> DeleteFunnelAsync(string id)
+    {
+        // Delete by key (Id maps to _id) — the LINQ predicate path is avoided on purpose,
+        // its member resolution is not reliable under concurrent first use of the mapper.
+        var col = _db.GetCollection<Funnel>("funnels");
+        return Task.FromResult(col.Delete(new BsonValue(id)));
+    }
+
+    public Task<FunnelReport?> GetFunnelReportAsync(string id, int days)
+    {
+        var funnel = _db.GetCollection<Funnel>("funnels").FindById(new BsonValue(id));
+        if (funnel == null || funnel.Steps.Count == 0)
+            return Task.FromResult<FunnelReport?>(null);
+
+        var today = DateTime.Now.Date;
+        var start = today.AddDays(-(days - 1));
+        var stepNames = funnel.Steps.ToHashSet();
+
+        // Only the funnel's own events, grouped per user and sorted once. A user passes step k
+        // when a step-k event exists at or after the timestamp that satisfied step k-1.
+        var byUser = _db.GetCollection<TrackEvent>("trackevents")
+            .Find(e => e.Timestamp >= start)
+            .Where(e => !string.IsNullOrEmpty(e.UserId) && stepNames.Contains(e.Name))
+            .GroupBy(e => e.UserId)
+            .Select(g => g.OrderBy(e => e.Timestamp).Select(e => (e.Name, e.Timestamp)).ToList());
+
+        var stepUsers = new int[funnel.Steps.Count];
+        foreach (var timeline in byUser)
+        {
+            var reached = DateTime.MinValue;
+            for (var k = 0; k < funnel.Steps.Count; k++)
+            {
+                var step = funnel.Steps[k];
+                var hit = timeline.FirstOrDefault(e => e.Name == step && e.Timestamp >= reached);
+                if (hit == default)
+                    break;
+                reached = hit.Timestamp;
+                stepUsers[k]++;
+            }
+        }
+
+        var report = new FunnelReport { Id = funnel.Id, Name = funnel.Name, Days = days };
+        for (var k = 0; k < funnel.Steps.Count; k++)
+        {
+            report.Steps.Add(new FunnelStepStat
+            {
+                Name = funnel.Steps[k],
+                Users = stepUsers[k],
+                PctOfPrevious = k == 0 ? null
+                    : stepUsers[k - 1] > 0 ? Math.Round(100.0 * stepUsers[k] / stepUsers[k - 1], 1) : 0,
+                PctOfFirst = stepUsers[0] > 0 ? Math.Round(100.0 * stepUsers[k] / stepUsers[0], 1) : 0,
+            });
+        }
+
+        return Task.FromResult<FunnelReport?>(report);
+    }
+
     public Task<ImmutableList<EventGroup>> GetEventGroupsAsync(bool crashesOnly, string? release = null, string? os = null)
     {
         var col = _db.GetCollection<AppEvent>("events");
@@ -542,6 +710,68 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         info.Collections = info.Collections.OrderByDescending(c => c.Bytes).ToList();
 
         return Task.FromResult(info);
+    }
+
+    public Task<PurgeResult> EstimatePurgeAsync(int olderThanDays) =>
+        Task.FromResult(ScanOldRecords(olderThanDays, delete: false));
+
+    public Task<PurgeResult> PurgeAsync(int olderThanDays) =>
+        Task.FromResult(ScanOldRecords(olderThanDays, delete: true));
+
+    // One walk over the three raw collections: counts and logical bytes of everything older
+    // than the cutoff, optionally deleting the matches. Works on the raw BsonDocuments so
+    // the same code both measures (preview) and removes (purge).
+    private PurgeResult ScanOldRecords(int olderThanDays, bool delete)
+    {
+        var cutoff = DateTime.Now.Date.AddDays(-olderThanDays);
+        var result = new PurgeResult { OlderThanDays = olderThanDays };
+
+        result.Events = Scan("events", "Timestamp");
+        result.Sessions = Scan("sessions", "Started");
+        result.TrackEvents = Scan("trackevents", "Timestamp");
+        return result;
+
+        int Scan(string name, string dateField)
+        {
+            var col = _db.GetCollection(name);
+            var predicate = BsonExpression.Create($"$.{dateField} < @0", new BsonValue(cutoff));
+
+            var count = 0;
+            foreach (var doc in col.Find(predicate))
+            {
+                count++;
+                result.Bytes += BsonSerializer.Serialize(doc).Length;
+            }
+
+            if (delete && count > 0)
+                col.DeleteMany(predicate);
+            return count;
+        }
+    }
+
+    public Task<CompactResult> CompactAsync()
+    {
+        var result = new CompactResult { BytesBefore = DatabaseFileSize() };
+
+        // Rebuild rewrites the datafile without its free pages — that's what actually shrinks
+        // the file after a purge. Checkpoint first so the WAL is folded in. The in-memory
+        // (test) database has no file to shrink, so it is left alone.
+        if (!string.IsNullOrEmpty(_dbFilePath))
+        {
+            _db.Checkpoint();
+            _db.Rebuild();
+        }
+
+        result.BytesAfter = DatabaseFileSize();
+        return Task.FromResult(result);
+    }
+
+    private long DatabaseFileSize()
+    {
+        if (string.IsNullOrEmpty(_dbFilePath))
+            return 0;
+        var full = Path.GetFullPath(_dbFilePath);
+        return File.Exists(full) ? new FileInfo(full).Length : 0;
     }
 
     private static List<CountByKey> BuildDurationBuckets(List<AppSession> sessions)

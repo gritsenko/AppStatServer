@@ -21,7 +21,10 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
   - **Overview** — stat cards, events-per-day chart, level breakdown, recent events & sessions.
   - **Analytics** — active & new users over 7/14/30/90 days, MAU/WAU/DAU, sessions per
     day, session-duration histogram, active users by app version, OS distribution and
-    top devices.
+    top devices, plus retention: D1/D7/D30 return rates and a weekly cohort table.
+  - **Funnels** — saved conversion funnels over the custom events: pick 2–10 event names
+    in order, and the report counts users who passed each step *after* the previous one
+    (per-step and overall conversion %).
   - **Events** — all non-crash events grouped by message (count / affected users / last
     seen), filterable by app version and OS.
   - **Crashes** — AppCenter-style diagnostics: crashes-per-day and errors-per-day charts,
@@ -42,16 +45,24 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
 | GET    | `/api/sessions`      | cookie | Last 100 sessions                    |
 | GET    | `/api/stats`         | cookie | Aggregated counts for the Overview   |
 | GET    | `/api/analytics?days=` | cookie | Usage analytics over a window (days 1–90, default 30) |
+| GET    | `/api/retention?weeks=` | cookie | D1/D7/D30 retention + weekly cohort table (weeks 2–26, default 8) |
+| GET    | `/api/funnels`       | cookie | Saved conversion funnels                |
+| POST   | `/api/funnels`       | cookie | Create a funnel (`{ "name", "steps": ["a","b",…] }`, 2–10 steps) |
+| DELETE | `/api/funnels/{id}`  | cookie | Delete a funnel                         |
+| GET    | `/api/funnels/{id}/report?days=` | cookie | Per-step users and conversion % over a window |
 | GET    | `/api/event-groups?release=&os=` | cookie | Non-crash events grouped by message (optional version/OS filter) |
 | GET    | `/api/crash-groups?release=&os=` | cookie | Crashes grouped by signature (optional version/OS filter) |
 | GET    | `/api/diagnostics?days=&release=` | cookie | Crashes + handled errors: per-day series and grouped signatures with resolution state (days 1–90, optional version filter) |
 | POST   | `/api/resolve`       | cookie | Mark a crash/error group resolved or reopen it (`{ "key", "resolved" }`) |
 | GET    | `/api/facets`        | cookie | Distinct releases & OSes for the filter dropdowns |
+| GET    | `/api/maintenance/purge-preview?olderThanDays=` | cookie | What a purge would remove: counts and logical bytes |
+| POST   | `/api/maintenance/purge` | cookie | Delete raw records older than a cutoff (`{ "olderThanDays": 90 }`, 7–3650) |
+| POST   | `/api/maintenance/compact` | cookie | Rebuild the LiteDB file to reclaim freed pages |
 | POST   | `/mcp`               | bearer | MCP (Streamable HTTP) server for agents — disabled unless `Mcp__Token` is set |
 
 The dashboard is a single protected page with client-side routing
-(`#/overview`, `#/analytics`, `#/events`, `#/crashes`); its data comes from the
-`/api/*` endpoints above.
+(`#/overview`, `#/analytics`, `#/events`, `#/funnels`, `#/crashes`); its data comes from
+the `/api/*` endpoints above.
 
 The ingest endpoint stays open — SDKs authenticate with their DSN, not the dashboard
 cookie. Everything under `/api/*` and the dashboard page require a login.
@@ -111,6 +122,30 @@ env vars, don't commit the token):
 
 Typical loop: `list_diagnostics` → `get_issue` on the worst one → fix the code → deploy →
 `resolve_issue`.
+
+## Website snippet (count visitors next to your app's analytics)
+
+The server ships an embeddable tracker at `/track.js` (~1 KB, no cookies, no third
+parties). Paste it into your site's `<head>` — the dashboard shows the full instructions
+with your host filled in under **Maintenance → Website tracking** (and behind the
+**Events → Connect website** button):
+
+```html
+<script async src="https://your-appstat-host/track.js" data-release="website@1.0.0"></script>
+```
+
+It assigns the visitor a stable anonymous id (localStorage) and sends to `POST /api/track`:
+
+- `site_visit` on every page view — with the page path, the external referrer host and
+  any `utm_source` / `utm_medium` / `utm_campaign` query tags, so campaign traffic is
+  attributable;
+- `site_click` for any element carrying `data-track`, e.g.
+  `<a href="/download" data-track="download_button">Download</a>`;
+- anything else via `appstat.track("name", { any: "props" })`.
+
+Combine it with a funnel like `site_visit → site_click` to see what share of site
+visitors head for the download, and compare that with the app's new-user counts on the
+Analytics page. The events show up under **Events** bucketed as the *Web* platform.
 
 ## Tech stack
 

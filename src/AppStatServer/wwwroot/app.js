@@ -40,6 +40,7 @@ const views = {
   overview: renderOverview,
   analytics: renderAnalytics,
   events: renderEvents,
+  funnels: renderFunnels,
   logs: renderLogs,
   crashes: renderDiagnostics,
   maintenance: renderMaintenance,
@@ -349,9 +350,15 @@ function renderSessionsTable(host, sessions) {
 // ---------- Analytics ----------
 async function renderAnalytics() {
   if (!cache.analytics || cache.analytics.days !== analyticsDays) {
-    cache.analytics = { days: analyticsDays, data: await fetchJson("/api/analytics?days=" + analyticsDays) };
+    const [data, retention] = await Promise.all([
+      fetchJson("/api/analytics?days=" + analyticsDays),
+      cache.retention ? Promise.resolve(cache.retention) : fetchJson("/api/retention?weeks=8"),
+    ]);
+    cache.retention = retention;
+    cache.analytics = { days: analyticsDays, data };
   }
   const a = cache.analytics.data;
+  const ret = cache.retention;
   const series = [
     { name: "Active users", color: "var(--series-1)", values: a.usersPerDay.map((d) => d.active) },
     { name: "New users", color: "var(--series-2)", values: a.usersPerDay.map((d) => d.newUsers) },
@@ -386,9 +393,21 @@ async function renderAnalytics() {
       <div class="panel"><h2>Active users by app version</h2><div class="breakdown" id="an-versions"></div></div>
       <div class="panel"><h2>OS distribution</h2><div class="breakdown" id="an-os"></div></div>
     </section>
-    <section class="panel wide"><h2>Top devices</h2><div class="breakdown" id="an-devices"></div></section>`;
+    <section class="panel wide"><h2>Top devices</h2><div class="breakdown" id="an-devices"></div></section>
+    <h2 class="section-title">Retention</h2>
+    <section class="cards tiles">
+      ${retentionTile("Day 1", ret.d1)}
+      ${retentionTile("Day 7", ret.d7)}
+      ${retentionTile("Day 30", ret.d30)}
+    </section>
+    <section class="panel wide">
+      <h2>Weekly cohorts</h2>
+      <p class="panel-hint">Each row is the users who first appeared that week; each cell is the share of them active N weeks later.</p>
+      <div id="an-cohorts"></div>
+    </section>`;
 
   renderLineChart(document.getElementById("an-users"), labels, series);
+  renderCohortTable(document.getElementById("an-cohorts"), ret.cohorts || []);
   renderBarChart(
     document.getElementById("an-sessions"),
     a.sessionsPerDay.map((d) => ({ label: d.date.slice(5), value: d.count }))
@@ -407,6 +426,234 @@ async function renderAnalytics() {
       renderAnalytics();
     });
   });
+}
+
+// A D1/D7/D30 tile: the % plus how many of the eligible users came back.
+function retentionTile(label, point) {
+  const value = point && point.pct != null ? point.pct + "%" : '<span class="value-muted">n/a</span>';
+  const sub = point && point.eligible
+    ? `${point.retained} of ${point.eligible} users returned`
+    : "no users old enough yet";
+  return kpiTile(label + " retention", value, { sub });
+}
+
+// The cohort triangle: one row per weekly cohort, cells shaded by % retained.
+function renderCohortTable(host, cohorts) {
+  const rows = cohorts.filter((c) => c.size > 0);
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Not enough data yet — cohorts appear once users have a first-seen week.</div>';
+    return;
+  }
+  const width = Math.max(...rows.map((c) => c.values.length));
+  const head =
+    "<tr><th>Cohort week</th><th class=\"num\">Users</th>" +
+    Array.from({ length: width }, (_, i) => `<th class="num">W${i}</th>`).join("") +
+    "</tr>";
+  const body = rows
+    .map((c) => {
+      const cells = Array.from({ length: width }, (_, i) => {
+        const v = c.values[i];
+        if (v == null) return '<td class="cohort-cell cohort-future"></td>';
+        // Shade tracks the retention share; capped so the label stays readable in both themes.
+        const mix = Math.round(Math.min(100, v) * 0.55);
+        return `<td class="cohort-cell" style="background:color-mix(in srgb, var(--accent) ${mix}%, transparent)">${Math.round(v)}%</td>`;
+      }).join("");
+      return `<tr><td class="time">${escapeHtml(c.week)}</td><td class="num">${c.size}</td>${cells}</tr>`;
+    })
+    .join("");
+  host.innerHTML = `<div class="table-wrap"><table class="cohort-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+}
+
+// ---------- Funnels (saved conversion funnels over custom events) ----------
+let funnelsDays = 30;
+
+async function renderFunnels() {
+  const [funnels, names] = await Promise.all([
+    fetchJson("/api/funnels"),
+    cache.eventNames
+      ? Promise.resolve(cache.eventNames)
+      : fetchJson("/api/events-report?days=90").then((r) => (r.events || []).map((e) => e.name)),
+  ]);
+  cache.eventNames = names;
+
+  view.innerHTML = `
+    <div class="page-head">
+      <h1>Funnels</h1>
+      <span class="page-sub">Ordered conversion over custom events · last ${funnelsDays} days</span>
+    </div>
+    <div class="toolbar">
+      <div class="range">
+        ${[7, 14, 30, 90].map((d) => `<button class="range-btn ${d === funnelsDays ? "active" : ""}" data-days="${d}">${d}d</button>`).join("")}
+      </div>
+    </div>
+    <div id="fn-list"></div>
+    <section class="panel wide">
+      <h2>New funnel</h2>
+      <p class="panel-hint">Pick 2–10 event names in the order users should pass them (e.g. <code>site_visit</code> → <code>site_click</code>, or <code>app_started</code> → <code>purchase</code>). A user counts for a step only after passing the previous one.</p>
+      <datalist id="fn-names">${names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("")}</datalist>
+      <div class="fn-form">
+        <input id="fn-name" type="text" placeholder="Funnel name" />
+        <div id="fn-steps"></div>
+        <div class="fn-form-actions">
+          <button id="fn-add-step" type="button">+ Add step</button>
+          <button id="fn-create" class="primary" type="button">Create funnel</button>
+        </div>
+        <div class="fn-error" id="fn-error" hidden></div>
+      </div>
+    </section>`;
+
+  document.querySelectorAll(".range-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      funnelsDays = Number(b.dataset.days);
+      renderFunnels();
+    });
+  });
+
+  // --- builder: a list of step inputs backed by the datalist of known event names ---
+  const stepsHost = document.getElementById("fn-steps");
+  function addStepInput(value = "") {
+    const row = document.createElement("div");
+    row.className = "fn-step-row";
+    row.innerHTML = `
+      <span class="fn-step-n">${stepsHost.children.length + 1}</span>
+      <input type="text" list="fn-names" placeholder="Event name…" value="${escapeHtml(value)}" />
+      <button type="button" class="fn-remove" title="Remove step">×</button>`;
+    row.querySelector(".fn-remove").addEventListener("click", () => {
+      row.remove();
+      [...stepsHost.children].forEach((r, i) => (r.querySelector(".fn-step-n").textContent = i + 1));
+    });
+    stepsHost.appendChild(row);
+  }
+  addStepInput();
+  addStepInput();
+  document.getElementById("fn-add-step").addEventListener("click", () => addStepInput());
+
+  document.getElementById("fn-create").addEventListener("click", async () => {
+    const name = document.getElementById("fn-name").value.trim();
+    const steps = [...stepsHost.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean);
+    const errEl = document.getElementById("fn-error");
+    if (!name || steps.length < 2) {
+      errEl.textContent = "Give the funnel a name and at least two steps.";
+      errEl.hidden = false;
+      return;
+    }
+    try {
+      await postJson("/api/funnels", { name, steps });
+      renderFunnels();
+    } catch {
+      errEl.textContent = "Failed to save the funnel.";
+      errEl.hidden = false;
+    }
+  });
+
+  // --- saved funnels, each with its report over the selected window ---
+  const list = document.getElementById("fn-list");
+  if (!funnels.length) {
+    list.innerHTML = `<div class="empty">No funnels yet. Create one below${names.length ? "" : " — send some custom events first (see the Events page)"}.</div>`;
+    return;
+  }
+  list.innerHTML = funnels
+    .map(
+      (f, i) => `
+      <section class="panel wide funnel-panel" data-id="${escapeHtml(f.id)}">
+        <div class="funnel-head">
+          <h2>${escapeHtml(f.name)}</h2>
+          <span class="funnel-overall" id="fn-overall-${i}"></span>
+          <button class="fn-delete" data-id="${escapeHtml(f.id)}" title="Delete funnel">Delete</button>
+        </div>
+        <div class="funnel-body" id="fn-body-${i}"><div class="empty">Loading…</div></div>
+      </section>`
+    )
+    .join("");
+
+  list.querySelectorAll(".fn-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this funnel? Its events stay — only the definition is removed.")) return;
+      await fetch("/api/funnels/" + encodeURIComponent(btn.dataset.id), { method: "DELETE" });
+      renderFunnels();
+    });
+  });
+
+  funnels.forEach(async (f, i) => {
+    const body = document.getElementById(`fn-body-${i}`);
+    try {
+      const r = await fetchJson(`/api/funnels/${encodeURIComponent(f.id)}/report?days=${funnelsDays}`);
+      drawFunnel(body, document.getElementById(`fn-overall-${i}`), r);
+    } catch {
+      body.innerHTML = '<div class="empty">Failed to load this funnel.</div>';
+    }
+  });
+}
+
+function drawFunnel(host, overallEl, report) {
+  const steps = report.steps || [];
+  if (!steps.length || !steps[0].users) {
+    host.innerHTML = '<div class="empty">No users entered this funnel in the window.</div>';
+    if (overallEl) overallEl.textContent = "";
+    return;
+  }
+  const last = steps[steps.length - 1];
+  if (overallEl) overallEl.textContent = `${last.pctOfFirst}% overall conversion`;
+
+  host.innerHTML = steps
+    .map(
+      (s, i) => `
+      <div class="funnel-step">
+        <div class="funnel-step-head">
+          <span class="funnel-step-name">${i + 1}. ${escapeHtml(s.name)}</span>
+          <span class="funnel-step-meta">${s.users} user${s.users === 1 ? "" : "s"}${
+            s.pctOfPrevious != null ? ` · ${s.pctOfPrevious}% of previous` : ""
+          }</span>
+        </div>
+        <div class="funnel-bar">
+          <div class="funnel-fill" style="width:${Math.max(s.pctOfFirst, 0.5)}%"></div>
+          <span class="funnel-pct">${s.pctOfFirst}%</span>
+        </div>
+      </div>`
+    )
+    .join("");
+}
+
+// The website tracker embed code, built for whatever host the dashboard is served from.
+function siteSnippetCode() {
+  return `<script async src="${location.origin}/track.js" data-release="website@1.0.0"><\/script>`;
+}
+const SITE_CLICK_EXAMPLE = `<a href="/download" data-track="download_button">Download<\/a>`;
+
+// Embed instructions for the website snippet (track.js), mirroring the MCP modal.
+function openSiteModal() {
+  const copyBtn = document.getElementById("modal-copy");
+  copyBtn.hidden = true;
+  copyBtn.onclick = null;
+  const resolveBtn = document.getElementById("modal-resolve");
+  resolveBtn.hidden = true;
+  resolveBtn.onclick = null;
+
+  const snippet = siteSnippetCode();
+  const clickExample = SITE_CLICK_EXAMPLE;
+
+  modalTitle.textContent = "Connect your website";
+  modalBody.innerHTML = `
+    <p class="mcp-intro">Paste this snippet into your site's <code>&lt;head&gt;</code> to count visits, referrers and UTM campaigns here, next to your app's analytics. No cookies, no third parties.</p>
+    <div class="mcp-field">
+      <label>Embed snippet</label>
+      <pre class="mcp-config">${escapeHtml(snippet)}</pre>
+      <button id="site-copy-snippet" class="primary" type="button">Copy snippet</button>
+    </div>
+    <div class="mcp-field">
+      <label>What gets tracked</label>
+      <ul class="site-list">
+        <li><code>site_visit</code> — every page view, with path, external referrer and <code>utm_source / utm_medium / utm_campaign</code>.</li>
+        <li><code>site_click</code> — clicks on any element with a <code>data-track</code> attribute, e.g.:</li>
+      </ul>
+      <pre class="mcp-config">${escapeHtml(clickExample)}</pre>
+      <button id="site-copy-click" type="button">Copy example</button>
+    </div>
+    <p class="mcp-foot">Then build a funnel like <code>site_visit → site_click</code> on the Funnels page to see how many visitors head for the download. Custom events: <code>appstat.track("name", { any: "props" })</code>.</p>`;
+
+  wireCopyBtn(document.getElementById("site-copy-snippet"), snippet);
+  wireCopyBtn(document.getElementById("site-copy-click"), clickExample);
+  modalBackdrop.classList.add("open");
 }
 
 // ---------- Events / Logs (grouped, server-filtered by version/OS) ----------
@@ -445,6 +692,9 @@ async function renderEvents() {
     <div class="page-head">
       <h1>Events</h1>
       <span class="page-sub">Custom product events · last ${r.days} days</span>
+      <button class="mcp-connect" id="ev-connect-site" type="button" title="Get the snippet that tracks your website's visits here">
+        <span class="mcp-connect-dot"></span>Connect website
+      </button>
     </div>
     <div class="toolbar">
       <div class="range">
@@ -476,6 +726,7 @@ async function renderEvents() {
     platSeries
   );
 
+  document.getElementById("ev-connect-site").addEventListener("click", openSiteModal);
   document.getElementById("ev-search").addEventListener("input", drawEventsTable);
   drawEventsTable();
 
@@ -823,6 +1074,53 @@ async function renderMaintenance() {
       <button id="sys-refresh" type="button" class="btn-sm">Refresh</button>
     </div>
     <div id="sys-host"><div class="empty">Loading system info…</div></div>
+
+    <h2 class="section-title">Data cleanup</h2>
+    <section class="maint-grid">
+      <div class="maint-card">
+        <h2>Delete old data</h2>
+        <p class="maint-desc">Removes raw events, sessions and custom events older than the chosen age. Aggregates on the dashboard are computed from raw records, so history beyond this age disappears. Cannot be undone.</p>
+        <div class="maint-controls">
+          <select id="purge-days">
+            <option value="365">older than 1 year</option>
+            <option value="180" selected>older than 180 days</option>
+            <option value="90">older than 90 days</option>
+            <option value="30">older than 30 days</option>
+          </select>
+        </div>
+        <p class="maint-est" id="purge-est">Estimating…</p>
+        <button class="danger" id="purge-btn">Delete old data</button>
+      </div>
+      <div class="maint-card">
+        <h2>Compact database</h2>
+        <p class="maint-desc">Rebuilds the LiteDB file so pages freed by deletions are returned to the OS — run it after a cleanup to actually shrink the file. Takes a moment on a large database.</p>
+        <p class="maint-est" id="compact-est"></p>
+        <button class="primary" id="compact-btn">Compact now</button>
+      </div>
+    </section>
+
+    <h2 class="section-title">Website tracking</h2>
+    <section class="dsn-panel">
+      <div class="dsn-info">
+        <span class="dsn-label">Connect your website</span>
+        <p class="dsn-hint">Count your site's visits, referrers and UTM campaigns here, next to the app's analytics — no cookies, no third parties. Paste this into the site's <code>&lt;head&gt;</code>:</p>
+      </div>
+      <div class="site-embed">
+        <pre class="mcp-config">${escapeHtml(siteSnippetCode())}</pre>
+        <button id="maint-copy-snippet" class="primary" type="button">Copy snippet</button>
+      </div>
+      <div class="dsn-info">
+        <p class="dsn-hint">Every page view arrives as <code>site_visit</code> (path, external referrer, <code>utm_source / utm_medium / utm_campaign</code>). To count clicks — e.g. on a download button — add a <code>data-track</code> attribute to any element:</p>
+      </div>
+      <div class="site-embed">
+        <pre class="mcp-config">${escapeHtml(SITE_CLICK_EXAMPLE)}</pre>
+        <button id="maint-copy-click" type="button">Copy example</button>
+      </div>
+      <div class="dsn-info">
+        <p class="dsn-hint">Clicks arrive as <code>site_click</code>. Custom events: <code>appstat.track("name", { any: "props" })</code>. Then build a funnel like <code>site_visit → site_click</code> on the <a href="#/funnels">Funnels</a> page to see how many visitors head for the download.</p>
+      </div>
+    </section>
+
     <section class="dsn-panel">
       <div class="dsn-info">
         <span class="dsn-label">Self-test</span>
@@ -872,7 +1170,89 @@ async function renderMaintenance() {
   document.getElementById("sys-refresh").addEventListener("click", () => loadSystemInfo());
   loadSystemInfo();
 
+  wireCopyBtn(document.getElementById("maint-copy-snippet"), siteSnippetCode());
+  wireCopyBtn(document.getElementById("maint-copy-click"), SITE_CLICK_EXAMPLE);
+  document.getElementById("purge-btn").addEventListener("click", maintPurge);
+  document.getElementById("compact-btn").addEventListener("click", maintCompact);
+  document.getElementById("purge-days").addEventListener("change", updatePurgeEstimate);
+  updatePurgeEstimate();
+
   drawMaintLog();
+}
+
+// Preview what the selected purge age would remove, so the red button isn't a blind jump.
+async function updatePurgeEstimate() {
+  const el = document.getElementById("purge-est");
+  if (!el) return;
+  const days = Number(document.getElementById("purge-days").value);
+  el.textContent = "Estimating…";
+  try {
+    const r = await fetchJson("/api/maintenance/purge-preview?olderThanDays=" + days);
+    el.textContent = r.total
+      ? `Would remove ${fmtNum(r.total)} record${r.total === 1 ? "" : "s"} (~${fmtBytes(r.bytes)} of data)`
+      : "Nothing is older than this — nothing would be removed.";
+  } catch {
+    el.textContent = "Couldn't estimate.";
+  }
+}
+
+// Delete raw records older than the selected age, then refresh the storage picture.
+async function maintPurge() {
+  const btn = document.getElementById("purge-btn");
+  const days = Number(document.getElementById("purge-days").value);
+  if (!confirm(`Delete all events, sessions and custom events older than ${days} days? This cannot be undone.`)) return;
+
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Deleting…";
+  try {
+    const r = await postJson("/api/maintenance/purge", { olderThanDays: days });
+    maintLog.unshift({
+      time: new Date().toISOString(),
+      ok: true,
+      text: `Deleted ${r.total} record${r.total === 1 ? "" : "s"} older than ${days} days`,
+      detail: `${r.events} events · ${r.sessions} sessions · ${r.trackEvents} custom events · ~${fmtBytes(r.bytes)} freed (compact to shrink the file)`,
+      route: null,
+    });
+    // The SPA caches page data — drop it so every page reflects the purge.
+    for (const k of Object.keys(cache)) delete cache[k];
+  } catch (e) {
+    maintLog.unshift({ time: new Date().toISOString(), ok: false, text: "Purge failed: " + e.message, detail: "", route: null });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    drawMaintLog();
+    loadSystemInfo();
+    updatePurgeEstimate();
+  }
+}
+
+// Rebuild the database file to reclaim the pages freed by purges.
+async function maintCompact() {
+  const btn = document.getElementById("compact-btn");
+  if (!confirm("Compact the database now? The server rebuilds its data file; this may take a moment.")) return;
+
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Compacting…";
+  try {
+    const r = await postJson("/api/maintenance/compact", {});
+    const freed = Math.max(0, (r.bytesBefore || 0) - (r.bytesAfter || 0));
+    maintLog.unshift({
+      time: new Date().toISOString(),
+      ok: true,
+      text: `Database compacted — ${fmtBytes(freed)} reclaimed`,
+      detail: `${fmtBytes(r.bytesBefore)} → ${fmtBytes(r.bytesAfter)}`,
+      route: null,
+    });
+  } catch (e) {
+    maintLog.unshift({ time: new Date().toISOString(), ok: false, text: "Compaction failed: " + e.message, detail: "", route: null });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    drawMaintLog();
+    loadSystemInfo();
+  }
 }
 
 // Fetch and render the host-resource panel. Kept out of the SPA cache so Refresh always
@@ -883,6 +1263,17 @@ async function loadSystemInfo() {
   try {
     const s = await fetchJson("/api/system");
     host.innerHTML = drawSystemInfo(s);
+
+    // The compact card's estimate: the gap between the file and its live data is free
+    // pages + index overhead — the upper bound of what a rebuild can give back.
+    const compactEst = document.getElementById("compact-est");
+    if (compactEst) {
+      const sto = s.storage || {};
+      const reclaimable = Math.max(0, (sto.databaseFileBytes || 0) - (sto.dataBytes || 0));
+      compactEst.textContent = sto.databaseFileBytes
+        ? `Up to ~${fmtBytes(reclaimable)} of the ${fmtBytes(sto.databaseFileBytes)} file is reclaimable (free + index pages).`
+        : "";
+    }
   } catch {
     host.innerHTML = '<div class="empty">Failed to load system info.</div>';
   }

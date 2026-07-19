@@ -181,6 +181,35 @@ api.MapGet("/sessions", (IEventStorage es) => es.GetRecentSessionsAsync());
 api.MapGet("/stats", (IEventStorage es) => es.GetStatsAsync());
 api.MapGet("/analytics", (IEventStorage es, int? days) =>
     es.GetAnalyticsAsync(days is >= 1 and <= 90 ? days.Value : 30));
+api.MapGet("/retention", (IEventStorage es, int? weeks) =>
+    es.GetRetentionAsync(weeks is >= 2 and <= 26 ? weeks.Value : 8));
+
+// Conversion funnels: saved definitions (ordered custom-event names) + per-funnel reports.
+api.MapGet("/funnels", (IEventStorage es) => es.GetFunnelsAsync());
+api.MapPost("/funnels", async (FunnelCreateRequest req, IEventStorage es) =>
+{
+    var steps = (req.Steps ?? [])
+        .Select(s => s?.Trim() ?? string.Empty)
+        .Where(s => s.Length > 0)
+        .ToList();
+    if (string.IsNullOrWhiteSpace(req.Name) || steps.Count < 2 || steps.Count > 10)
+        return Results.BadRequest(new { error = "a funnel needs a name and 2–10 steps" });
+
+    var funnel = await es.SaveFunnelAsync(new Funnel
+    {
+        Name = req.Name.Trim(),
+        Steps = steps,
+        CreatedAt = DateTime.Now,
+    });
+    return Results.Ok(funnel);
+});
+api.MapDelete("/funnels/{id}", async (string id, IEventStorage es) =>
+    await es.DeleteFunnelAsync(id) ? Results.Ok() : Results.NotFound());
+api.MapGet("/funnels/{id}/report", async (string id, int? days, IEventStorage es) =>
+    await es.GetFunnelReportAsync(id, days is >= 1 and <= 90 ? days.Value : 30) is { } report
+        ? Results.Ok(report)
+        : Results.NotFound());
+
 api.MapGet("/event-groups", (IEventStorage es, string? release, string? os) => es.GetEventGroupsAsync(false, release, os));
 api.MapGet("/crash-groups", (IEventStorage es, string? release, string? os) => es.GetEventGroupsAsync(true, release, os));
 api.MapGet("/facets", (IEventStorage es) => es.GetFacetsAsync());
@@ -193,6 +222,18 @@ api.MapPost("/resolve", async (ResolveRequest req, IEventStorage es) =>
     string.IsNullOrEmpty(req.Key)
         ? Results.BadRequest(new { error = "key is required" })
         : Results.Ok(new { key = req.Key, resolved = await es.SetResolutionAsync(req.Key, req.Resolved) }));
+
+// Data-retention actions for the Maintenance page. Purge deletes raw records older than
+// the cutoff; compact then rebuilds the database file so the freed pages leave the disk.
+api.MapGet("/maintenance/purge-preview", async (int? olderThanDays, IEventStorage es) =>
+    olderThanDays is >= 7 and <= 3650
+        ? Results.Ok(await es.EstimatePurgeAsync(olderThanDays.Value))
+        : Results.BadRequest(new { error = "olderThanDays must be between 7 and 3650" }));
+api.MapPost("/maintenance/purge", async (PurgeRequest req, IEventStorage es) =>
+    req.OlderThanDays is >= 7 and <= 3650
+        ? Results.Ok(await es.PurgeAsync(req.OlderThanDays))
+        : Results.BadRequest(new { error = "olderThanDays must be between 7 and 3650" }));
+api.MapPost("/maintenance/compact", (IEventStorage es) => es.CompactAsync());
 
 // Host resources for the Maintenance page: free disk/RAM, this process's footprint, and the
 // storage our own data consumes. The disk probe targets the drive the database lives on.
