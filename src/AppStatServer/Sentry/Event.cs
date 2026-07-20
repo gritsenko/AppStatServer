@@ -10,6 +10,11 @@ public class ExceptionValue
     public string? value { get; set; }
     public string? module { get; set; }
     public int thread_id { get; set; }
+
+    // The Sentry .NET SDK attaches the managed call stack to the exception entry itself
+    // (not always to a thread), so an exception captured via CaptureException carries its
+    // frames here. Reading only thread frames drops them entirely.
+    public StacktraceValue? stacktrace { get; set; }
 }
 
 public class StacktraceFrame
@@ -195,4 +200,9 @@ public class EventEntry
     public string? environment { get; set; }
     public SdkInfo? sdk { get; set; }
     public DebugMeta? debug_meta { get; set; }
+
+    // Arbitrary key/value context the app attaches via scope.SetExtra — e.g. Pix2d sends
+    // stack_trace_text (capture-site fallback), exception_chain, app_context, last_command.
+    // On trimmed/AOT builds where the exception carries no frames, this is the only stack we get.
+    public Dictionary<string, System.Text.Json.JsonElement>? extra { get; set; }
 }

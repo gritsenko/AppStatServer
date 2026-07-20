@@ -49,6 +49,48 @@ public class EnvelopeParserTests
         await Assert.That(ev.EventEntry!).Contains("\"event_id\":\"abc123\"");
     }
 
+    // The Sentry .NET SDK attaches managed frames to the exception entry itself (no thread block),
+    // which is what CaptureException produces. These were previously dropped.
+    private const string ExceptionFramesEnvelope =
+        """{"event_id":"exc-1","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"myapp@1.2.3","exception":{"values":[{"type":"System.Exception","value":"boom","stacktrace":{"frames":[{"function":"Outer","filename":"Outer.cs","lineno":5,"in_app":true},{"function":"Inner","filename":"Inner.cs","lineno":10,"in_app":true}]}}]}}""";
+
+    // A trimmed/AOT-style frame-less exception: no frames anywhere, but the app attaches the
+    // capture-site stack as an extra. This is the "стектрейсы никакие" case.
+    private const string FramelessWithExtraEnvelope =
+        """{"event_id":"frameless-1","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"myapp@1.2.3","exception":{"values":[{"type":"System.IndexOutOfRangeException","value":"Index was outside the bounds of the array."}]},"extra":{"stack_trace_text":"(exception carried no stack — capture-site trace below)\n   at Pix2d.Foo.Bar()","exception_chain":"[0] System.IndexOutOfRangeException","app_context":"plat=Android tool=Brush","last_command":"Undo"}}""";
+
+    [Test]
+    public async Task Captures_exception_level_frames()
+    {
+        var ev = EnvelopeParser.Parse(ExceptionFramesEnvelope).Events[0];
+
+        await Assert.That(ev.StackTrace).IsNotNull();
+        await Assert.That(ev.StackTrace!).Contains("System.Exception: boom");
+        await Assert.That(ev.StackTrace!).Contains("Inner.cs:line 10");
+        await Assert.That(ev.StackTrace!).Contains("Outer.cs:line 5");
+    }
+
+    [Test]
+    public async Task Frameless_exception_falls_back_to_stack_trace_text_extra()
+    {
+        var ev = EnvelopeParser.Parse(FramelessWithExtraEnvelope).Events[0];
+
+        await Assert.That(ev.StackTrace).IsNotNull();
+        await Assert.That(ev.StackTrace!).Contains("System.IndexOutOfRangeException");
+        await Assert.That(ev.StackTrace!).Contains("capture-site fallback");
+        await Assert.That(ev.StackTrace!).Contains("at Pix2d.Foo.Bar()");
+    }
+
+    [Test]
+    public async Task Extract_extras_returns_app_context_fields()
+    {
+        var extras = EnvelopeParser.ExtractExtras(FramelessWithExtraEnvelope);
+
+        await Assert.That(extras["app_context"]).IsEqualTo("plat=Android tool=Brush");
+        await Assert.That(extras["last_command"]).IsEqualTo("Undo");
+        await Assert.That(extras.ContainsKey("exception_chain")).IsTrue();
+    }
+
     [Test]
     public async Task Parses_session_payload_into_app_session()
     {

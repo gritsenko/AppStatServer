@@ -135,10 +135,18 @@ public static partial class EnvelopeParser
     private static string? BuildStackTrace(EventEntry eventEntry)
     {
         var sb = new StringBuilder();
+        var usefulFrames = false;
 
         if (eventEntry.exception?.values is { Count: > 0 } exceptions)
             foreach (var ex in exceptions)
+            {
                 sb.AppendLine($"{ex.type}: {ex.value}");
+                // The SDK attaches the managed stack to the exception entry itself — reading
+                // only thread frames (below) drops it, which is why AOT/handled errors looked
+                // frame-less. Render these too.
+                if (AppendFrames(sb, ex.stacktrace?.frames))
+                    usefulFrames = true;
+            }
 
         var threads = eventEntry.threads?.values;
         if (threads != null)
@@ -151,21 +159,96 @@ public static partial class EnvelopeParser
                 if (thread.crashed)
                     sb.AppendLine($"Thread {thread.id} (crashed):");
 
-                // Sentry sends frames oldest-first; reverse so the throwing frame is on top.
-                for (var i = frames.Count - 1; i >= 0; i--)
-                {
-                    var f = frames[i];
-                    var location = !string.IsNullOrEmpty(f.filename)
-                        ? $" in {f.filename}{(f.lineno.HasValue ? $":line {f.lineno}" : string.Empty)}"
-                        : !string.IsNullOrEmpty(f.package)
-                            ? $" [{f.package}]"
-                            : string.Empty;
-                    sb.AppendLine($"   at {f.function}{location}");
-                }
+                if (AppendFrames(sb, frames))
+                    usefulFrames = true;
             }
+
+        // Frame-less event (trimmed/AOT builds strip managed frames; native-only frames carry no
+        // symbol). Fall back to the capture-site text stack the app attaches as an extra, so the
+        // reported stack is never just "Type: message".
+        if (!usefulFrames && TryGetExtraString(eventEntry, "stack_trace_text", out var textStack))
+        {
+            sb.AppendLine();
+            sb.AppendLine("=== stack_trace_text (capture-site fallback) ===");
+            sb.AppendLine(textStack);
+        }
 
         var stackTrace = sb.ToString().TrimEnd();
         return string.IsNullOrWhiteSpace(stackTrace) ? null : stackTrace;
+    }
+
+    // Renders frames oldest-last (Sentry sends them oldest-first, so we reverse to put the
+    // throwing frame on top). Returns true only if at least one frame carried a symbol
+    // (function or filename) — native-only frames don't count, so the stack_trace_text
+    // fallback still kicks in for symbol-less AOT stacks.
+    private static bool AppendFrames(StringBuilder sb, List<StacktraceFrame>? frames)
+    {
+        if (frames == null || frames.Count == 0)
+            return false;
+
+        var useful = false;
+        for (var i = frames.Count - 1; i >= 0; i--)
+        {
+            var f = frames[i];
+            var location = !string.IsNullOrEmpty(f.filename)
+                ? $" in {f.filename}{(f.lineno.HasValue ? $":line {f.lineno}" : string.Empty)}"
+                : !string.IsNullOrEmpty(f.package)
+                    ? $" [{f.package}]"
+                    : string.Empty;
+            sb.AppendLine($"   at {f.function}{location}");
+
+            if (!string.IsNullOrEmpty(f.function) || !string.IsNullOrEmpty(f.filename))
+                useful = true;
+        }
+
+        return useful;
+    }
+
+    private static bool TryGetExtraString(EventEntry eventEntry, string key, out string value)
+    {
+        value = string.Empty;
+        if (eventEntry.extra is null || !eventEntry.extra.TryGetValue(key, out var el))
+            return false;
+
+        var s = el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString();
+        if (string.IsNullOrWhiteSpace(s))
+            return false;
+
+        value = s;
+        return true;
+    }
+
+    /// <summary>
+    /// Pulls the app-attached <c>extra</c> context out of a raw event entry (the JSON persisted in
+    /// <see cref="AppEvent.EventEntry"/>). Used by the diagnostics MCP tool to surface fields like
+    /// <c>exception_chain</c>, <c>app_context</c> and <c>last_command</c> that the stack alone omits.
+    /// Best-effort: malformed or absent extras yield an empty dictionary rather than throwing.
+    /// </summary>
+    public static Dictionary<string, string> ExtractExtras(string? rawEntry)
+    {
+        var result = new Dictionary<string, string>();
+        if (string.IsNullOrWhiteSpace(rawEntry))
+            return result;
+
+        try
+        {
+            var eventEntry = JsonSerializer.Deserialize<EventEntry>(rawEntry);
+            if (eventEntry?.extra is null)
+                return result;
+
+            foreach (var (k, el) in eventEntry.extra)
+            {
+                var s = el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString();
+                if (!string.IsNullOrWhiteSpace(s))
+                    result[k] = s;
+            }
+        }
+        catch (JsonException)
+        {
+            // A non-event entry or truncated payload — just return what we have.
+        }
+
+        return result;
     }
 
     [GeneratedRegex(@"(\d+\.\d+\.\d+)(\+\w+)?$")]
