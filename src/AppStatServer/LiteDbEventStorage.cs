@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using AppStatServer.Data;
+using AppStatServer.Sentry;
 using LiteDB;
 
 namespace AppStatServer;
@@ -636,6 +637,9 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             .Select(g =>
             {
                 var latest = g.OrderByDescending(e => e.Timestamp).First();
+                // Pull the app-attached extras out of the raw payload before trimming it, so the
+                // signature keeps its triage context (esp. for frame-less AOT stacks).
+                var context = EnvelopeParser.ExtractExtras(latest.EventEntry);
                 latest.EventEntry = null; // trim the bulky raw payload from the sample
 
                 var lastSeen = g.Max(e => e.Timestamp);
@@ -656,6 +660,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                     Resolved = resolvedAt.HasValue && lastSeen <= resolvedAt.Value,
                     ResolvedAt = resolvedAt,
                     Sample = latest,
+                    Context = context.Count > 0 ? context : null,
                 };
             })
             .ToList();

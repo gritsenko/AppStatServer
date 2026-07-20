@@ -38,6 +38,11 @@ public class DiagnosticGroup
     public DateTime? ResolvedAt { get; set; }
 
     public AppEvent Sample { get; set; } = new(); // latest occurrence (carries the stack trace)
+
+    // App-attached extras (stack_trace_text, exception_chain, app_context, last_command, …)
+    // pulled from the latest occurrence's raw payload before it is trimmed off the Sample.
+    // On trimmed/AOT builds these are often the only pointer at the offending code.
+    public Dictionary<string, string>? Context { get; set; }
 }
 
 // Persisted resolution state, keyed by DiagnosticGroup.Key. A group counts as resolved while

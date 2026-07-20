@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using AppStatServer.Data;
-using AppStatServer.Sentry;
 using ModelContextProtocol.Server;
 
 namespace AppStatServer.Mcp;
@@ -82,10 +81,10 @@ public class DiagnosticsTools(IEventStorage storage)
             return new { error = $"No signature '{key}' seen in the last {days} day(s)." };
 
         var s = group.Sample;
-        // App-attached context (exception_chain, app_context, last_command, …). On trimmed/AOT
-        // builds the exception carries no frames, so these extras — plus the stack_trace_text
-        // now folded into StackTrace — are often the only way to locate the offending code.
-        var context = EnvelopeParser.ExtractExtras(s.EventEntry);
+        // App-attached context (exception_chain, app_context, last_command, stack_trace_text, …),
+        // extracted from the raw payload by storage before it trims the Sample. On trimmed/AOT
+        // builds the exception carries no frames, so this is often the only pointer at the code.
+        var context = group.Context;
         return new
         {
             key = group.Key,
@@ -111,7 +110,7 @@ public class DiagnosticsTools(IEventStorage storage)
                 traceId = s.TraceId,
                 spanId = s.SpanId,
                 stackTrace = s.StackTrace,
-                context = context.Count > 0 ? context : null,
+                context,
             },
         };
     }
