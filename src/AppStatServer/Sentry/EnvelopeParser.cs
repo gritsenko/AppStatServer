@@ -132,6 +132,28 @@ public static partial class EnvelopeParser
         return match.Success ? match.Groups[1].Value : release;
     }
 
+    /// <summary>
+    /// Rebuilds the human-readable stack from a raw persisted event entry (the JSON stored in
+    /// <see cref="AppEvent.EventEntry"/>). Lets already-ingested events benefit from parser
+    /// improvements (exception-level frames, stack_trace_text fallback) without re-ingesting.
+    /// Returns null if the payload can't be parsed or carries no stack.
+    /// </summary>
+    public static string? BuildStackTraceFromRaw(string? rawEntry)
+    {
+        if (string.IsNullOrWhiteSpace(rawEntry))
+            return null;
+
+        try
+        {
+            var eventEntry = JsonSerializer.Deserialize<EventEntry>(rawEntry);
+            return eventEntry is null ? null : BuildStackTrace(eventEntry);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static string? BuildStackTrace(EventEntry eventEntry)
     {
         var sb = new StringBuilder();

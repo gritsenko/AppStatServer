@@ -637,6 +637,11 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             .Select(g =>
             {
                 var latest = g.OrderByDescending(e => e.Timestamp).First();
+                // Rebuild the stack from the raw payload so already-stored events pick up parser
+                // fixes (exception-level frames, stack_trace_text fallback) without re-ingesting.
+                var rebuilt = EnvelopeParser.BuildStackTraceFromRaw(latest.EventEntry);
+                if (!string.IsNullOrWhiteSpace(rebuilt))
+                    latest.StackTrace = rebuilt;
                 // Pull the app-attached extras out of the raw payload before trimming it, so the
                 // signature keeps its triage context (esp. for frame-less AOT stacks).
                 var context = EnvelopeParser.ExtractExtras(latest.EventEntry);
