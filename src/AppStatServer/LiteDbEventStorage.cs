@@ -19,6 +19,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
     {
         ["events"] = "Logs & crashes",
         ["sessions"] = "Sessions",
+        ["clientsessions"] = "Active sessions",
         ["trackevents"] = "Custom events",
         ["resolutions"] = "Resolutions",
         ["funnels"] = "Funnels",
@@ -52,6 +53,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             // ToDocument fully builds and caches the entity mapper for each type.
             _ = _db.Mapper.ToDocument(new AppEvent());
             _ = _db.Mapper.ToDocument(new AppSession());
+            _ = _db.Mapper.ToDocument(new ClientSession());
             _ = _db.Mapper.ToDocument(new TrackEvent());
             _ = _db.Mapper.ToDocument(new Funnel());
             _ = _db.Mapper.ToDocument(new Resolution());
@@ -98,8 +100,94 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
     public Task<ImmutableList<TrackEvent>> GetRecentTrackEventsAsync()
     {
         var col = _db.GetCollection<TrackEvent>("trackevents");
-        var result = col.Find(x => true, 0, 100);
+        // Defensive: reserved infrastructure events (name starting with '@') are filtered at ingest,
+        // but never surface them in product listings even if a stray one was stored.
+        var result = col.Find(x => true, 0, 100).Where(e => !e.Name.StartsWith("@"));
         return Task.FromResult(result.ToImmutableList());
+    }
+
+    public Task SaveClientSessionsAsync(IEnumerable<ClientSession> sessions)
+    {
+        var col = _db.GetCollection<ClientSession>("clientsessions");
+        col.EnsureIndex(s => s.Started);
+
+        // Counters are cumulative-since-process-start and pings repeat, so merge by keeping the
+        // largest values seen. First non-default Started wins. This makes out-of-order / duplicate
+        // delivery idempotent.
+        foreach (var incoming in sessions)
+        {
+            if (string.IsNullOrEmpty(incoming.Id))
+                continue;
+
+            var existing = col.FindById(incoming.Id);
+            if (existing == null)
+            {
+                col.Upsert(incoming);
+                continue;
+            }
+
+            existing.ActiveSeconds = Math.Max(existing.ActiveSeconds, incoming.ActiveSeconds);
+            existing.WallSeconds = Math.Max(existing.WallSeconds, incoming.WallSeconds);
+            existing.LastSeen = incoming.LastSeen > existing.LastSeen ? incoming.LastSeen : existing.LastSeen;
+            if (existing.Started == default && incoming.Started != default)
+                existing.Started = incoming.Started;
+            // Latest identity metadata wins if the earlier ping lacked it.
+            existing.Release = string.IsNullOrEmpty(existing.Release) ? incoming.Release : existing.Release;
+            existing.Os ??= incoming.Os;
+            existing.Platform ??= incoming.Platform;
+            col.Upsert(existing);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<ImmutableList<ClientSessionRow>> GetRecentClientSessionsAsync(int days, int limit)
+    {
+        var col = _db.GetCollection<ClientSession>("clientsessions");
+        var trackCol = _db.GetCollection<TrackEvent>("trackevents");
+
+        var start = DateTime.Now.Date.AddDays(-(days - 1));
+
+        var recent = col.Find(s => s.Started >= start)
+            .OrderByDescending(s => s.Started)
+            .Take(limit)
+            .ToList();
+
+        // Event count per session — join by SessionId. One grouped read over the window covers all
+        // the rows we're returning.
+        var ids = recent.Select(s => s.Id).ToHashSet();
+        var counts = trackCol.Find(e => e.Timestamp >= start)
+            .Where(e => ids.Contains(e.SessionId))
+            .GroupBy(e => e.SessionId)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var rows = recent
+            .Select(s => new ClientSessionRow { Session = s, EventCount = counts.GetValueOrDefault(s.Id, 0) })
+            .ToImmutableList();
+
+        return Task.FromResult(rows);
+    }
+
+    public Task<ClientSessionDetail?> GetClientSessionAsync(string id)
+    {
+        var col = _db.GetCollection<ClientSession>("clientsessions");
+        var session = col.FindById(id);
+        if (session == null)
+            return Task.FromResult<ClientSessionDetail?>(null);
+
+        var trackCol = _db.GetCollection<TrackEvent>("trackevents");
+        var events = trackCol.Find(e => e.SessionId == id)
+            .OrderBy(e => e.Timestamp)
+            .Select(e => new SessionEvent
+            {
+                Name = e.Name,
+                Timestamp = e.Timestamp,
+                OffsetSeconds = (int)Math.Max(0, (e.Timestamp - session.Started).TotalSeconds),
+                Properties = e.Properties,
+            })
+            .ToList();
+
+        return Task.FromResult<ClientSessionDetail?>(new ClientSessionDetail { Session = session, Events = events });
     }
 
     public Task<EventReport> GetEventReportAsync(int days, string? release = null, string? os = null)
@@ -111,7 +199,9 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         var start = today.AddDays(-(days - 1));
         var dayList = Enumerable.Range(0, days).Select(i => start.AddDays(i)).ToList();
 
-        var windowed = col.Find(e => e.Timestamp >= start).ToList();
+        // Reserved infrastructure events (name starting with '@', e.g. "@session") are never product
+        // events — exclude them defensively even though ingest already keeps them out of this collection.
+        var windowed = col.Find(e => e.Timestamp >= start).Where(e => !e.Name.StartsWith("@")).ToList();
 
         // Filter facets are computed over the whole window (before release/os narrowing),
         // so selecting one value doesn't collapse the other dropdown's options. The raw OS /
@@ -288,6 +378,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
     {
         var events = _db.GetCollection<AppEvent>("events");
         var sessions = _db.GetCollection<AppSession>("sessions");
+        var clientSessionsCol = _db.GetCollection<ClientSession>("clientsessions");
         var trackEvents = _db.GetCollection<TrackEvent>("trackevents");
 
         // LiteDB returns DateTimes as local time, so anchor the window on local "now".
@@ -312,6 +403,14 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         var winActivity = activity.Where(a => a.Timestamp >= start).ToList();
         var winSessions = sessions.Find(s => s.Started >= start).ToList();
 
+        // Client-reported active-time sessions in the window (empty for old clients / no data yet).
+        var winClientSessions = clientSessionsCol.Find(s => s.Started >= start).ToList();
+        var activeSecs = winClientSessions.Select(s => s.ActiveSeconds).ToList();
+        var clientWallSecs = winClientSessions.Select(s => s.WallSeconds).ToList();
+        var sumActive = activeSecs.Sum();
+        var sumClientWall = clientWallSecs.Sum();
+        var wallSecs = winSessions.Select(s => (long)s.Duration).ToList();
+
         var activeByDay = winActivity
             .GroupBy(a => a.Timestamp.Date)
             .ToDictionary(g => g.Key, g => g.Select(a => a.UserId).Distinct().Count());
@@ -334,6 +433,14 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             NewUsers = firstSeen.Count(kv => kv.Value >= start),
             TotalSessions = winSessions.Count,
             AvgSessionSeconds = winSessions.Count > 0 ? winSessions.Average(s => s.Duration) : 0,
+            MedianSessionSeconds = Median(wallSecs),
+
+            ClientSessions = winClientSessions.Count,
+            AvgActiveSessionSeconds = activeSecs.Count > 0 ? activeSecs.Average() : 0,
+            MedianActiveSessionSeconds = Median(activeSecs),
+            AvgClientWallSeconds = clientWallSecs.Count > 0 ? clientWallSecs.Average() : 0,
+            EngagementRatio = sumClientWall > 0 ? (double)sumActive / sumClientWall : 0,
+            ActiveDurationBuckets = BuildDurationBuckets(winClientSessions, s => (int)s.ActiveSeconds),
             UsersPerDay = dayList.Select(d => new DayPoint
             {
                 Date = d.ToString("yyyy-MM-dd"),
@@ -345,7 +452,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 Date = d.ToString("yyyy-MM-dd"),
                 Count = winSessions.Count(s => s.Started.Date == d),
             }).ToList(),
-            DurationBuckets = BuildDurationBuckets(winSessions),
+            DurationBuckets = BuildDurationBuckets(winSessions, s => s.Duration),
             VersionDistribution = winActivity
                 .Where(a => !string.IsNullOrEmpty(a.Release))
                 .GroupBy(a => a.Release)
@@ -738,6 +845,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
 
         result.Events = Scan("events", "Timestamp");
         result.Sessions = Scan("sessions", "Started");
+        result.Sessions += Scan("clientsessions", "Started");
         result.TrackEvents = Scan("trackevents", "Timestamp");
         return result;
 
@@ -784,7 +892,9 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         return File.Exists(full) ? new FileInfo(full).Length : 0;
     }
 
-    private static List<CountByKey> BuildDurationBuckets(List<AppSession> sessions)
+    // Session-length histogram over a shared set of bucket edges, so wall-clock (AppSession.Duration)
+    // and active-time (ClientSession.ActiveSeconds) render on identical bins.
+    private static List<CountByKey> BuildDurationBuckets<T>(IReadOnlyCollection<T> items, Func<T, int> seconds)
     {
         (string Label, Func<int, bool> Match)[] buckets =
         [
@@ -797,8 +907,19 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         ];
 
         return buckets
-            .Select(b => new CountByKey { Key = b.Label, Count = sessions.Count(s => b.Match(s.Duration)) })
+            .Select(b => new CountByKey { Key = b.Label, Count = items.Count(x => b.Match(seconds(x))) })
             .ToList();
+    }
+
+    // Median of a sequence of seconds (0 when empty). Kept separate from the average because
+    // session lengths are dominated by parked-window outliers — the median is the stable "typical".
+    private static double Median(IReadOnlyList<long> values)
+    {
+        if (values.Count == 0)
+            return 0;
+        var sorted = values.OrderBy(v => v).ToList();
+        var mid = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
     }
 
     public void Dispose() => _db.Dispose();

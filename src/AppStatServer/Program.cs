@@ -214,6 +214,13 @@ api.MapGet("/event-groups", (IEventStorage es, string? release, string? os) => e
 api.MapGet("/crash-groups", (IEventStorage es, string? release, string? os) => es.GetEventGroupsAsync(true, release, os));
 api.MapGet("/facets", (IEventStorage es) => es.GetFacetsAsync());
 api.MapGet("/track-events", (IEventStorage es) => es.GetRecentTrackEventsAsync());
+// Client-reported active-time sessions + a single session's event timeline (the per-session drill-down).
+api.MapGet("/client-sessions", (IEventStorage es, int? days, int? limit) =>
+    es.GetRecentClientSessionsAsync(
+        days is >= 1 and <= 90 ? days.Value : 14,
+        limit is >= 1 and <= 500 ? limit.Value : 50));
+api.MapGet("/client-sessions/{id}", async (string id, IEventStorage es) =>
+    await es.GetClientSessionAsync(id) is { } detail ? Results.Ok(detail) : Results.NotFound());
 api.MapGet("/events-report", (IEventStorage es, int? days, string? release, string? os) =>
     es.GetEventReportAsync(days is >= 1 and <= 90 ? days.Value : 30, release, os));
 api.MapGet("/diagnostics", (IEventStorage es, int? days, string? release) =>

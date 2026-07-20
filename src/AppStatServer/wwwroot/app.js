@@ -131,7 +131,11 @@ async function renderOverview() {
       ${kpiTile("Daily active users", a.dau, { sub: `WAU ${a.wau} · MAU ${a.mau}` })}
       ${kpiTile("New users", a.newUsers, { cls: "custom-events" })}
       ${kpiTile("Sessions", a.totalSessions, { cls: "sessions", sub: `${a.sessionsPerUser.toFixed(1)} per user` })}
-      ${kpiTile("Avg. session", fmtDuration(a.avgSessionSeconds))}
+      ${a.clientSessions > 0
+        ? kpiTile("Median active session", fmtDuration(a.medianActiveSessionSeconds), {
+            sub: `avg ${fmtDuration(a.avgActiveSessionSeconds)} · wall ${fmtDuration(a.avgSessionSeconds)}`,
+          })
+        : kpiTile("Avg. session", fmtDuration(a.avgSessionSeconds), { sub: "wall-clock — process lifetime" })}
     </section>
     <section class="panels">
       <div class="panel">
@@ -347,15 +351,95 @@ function renderSessionsTable(host, sessions) {
     `</tbody></table>`;
 }
 
+// Client-reported active-time sessions, newest first. Each row expands into the session's event
+// timeline (fetched on demand from /api/client-sessions/{id}).
+function renderClientSessionsTable(host, rows) {
+  if (!host) return;
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">No active-time sessions in this window yet.</div>';
+    return;
+  }
+  host.innerHTML =
+    `<table><thead><tr><th>Started</th><th>User</th><th>Platform</th><th>Release</th>` +
+    `<th>Wall</th><th>Active</th><th>Activity</th><th>Events</th></tr></thead><tbody>` +
+    rows
+      .map((r) => {
+        const s = r.session;
+        const pct = s.wallSeconds > 0 ? Math.round((s.activeSeconds / s.wallSeconds) * 100) : 0;
+        return `<tr class="cs-row" data-id="${escapeHtml(s.id)}">
+          <td class="time">${fmtTime(s.started)}</td>
+          <td class="mono">${escapeHtml(shortId(s.userId))}</td>
+          <td>${escapeHtml(s.platform || "-")}</td>
+          <td>${escapeHtml(s.release || "-")}</td>
+          <td class="num">${fmtDuration(s.wallSeconds)}</td>
+          <td class="num">${fmtDuration(s.activeSeconds)}</td>
+          <td class="num">${pct}%</td>
+          <td class="num">${escapeHtml(String(r.eventCount))}</td></tr>
+        <tr class="cs-detail" data-for="${escapeHtml(s.id)}" hidden><td colspan="8"></td></tr>`;
+      })
+      .join("") +
+    `</tbody></table>`;
+
+  host.querySelectorAll(".cs-row").forEach((row) => {
+    row.addEventListener("click", async () => {
+      const id = row.dataset.id;
+      const detailRow = host.querySelector(`.cs-detail[data-for="${cssEscape(id)}"]`);
+      if (!detailRow) return;
+      if (!detailRow.hidden) {
+        detailRow.hidden = true;
+        return;
+      }
+      const cell = detailRow.firstElementChild;
+      cell.innerHTML = '<div class="empty">Loading…</div>';
+      detailRow.hidden = false;
+      try {
+        const detail = await fetchJson(`/api/client-sessions/${encodeURIComponent(id)}`);
+        cell.innerHTML = renderSessionTimeline(detail);
+      } catch {
+        cell.innerHTML = '<div class="empty">Could not load session detail.</div>';
+      }
+    });
+  });
+}
+
+// The event timeline inside an expanded session row: each product event with its offset from the
+// session start.
+function renderSessionTimeline(detail) {
+  const events = detail && detail.events ? detail.events : [];
+  if (!events.length)
+    return '<div class="empty">No product events recorded during this session.</div>';
+  return (
+    `<div class="session-timeline">` +
+    events
+      .map((e) => {
+        const props = e.properties && Object.keys(e.properties).length
+          ? ` <span class="tl-props">${escapeHtml(
+              Object.entries(e.properties).map(([k, v]) => `${k}=${v}`).join(", ")
+            )}</span>`
+          : "";
+        return `<div class="tl-row"><span class="tl-offset mono">+${fmtDuration(e.offsetSeconds)}</span>` +
+          `<span class="tl-name">${escapeHtml(e.name)}</span>${props}</div>`;
+      })
+      .join("") +
+    `</div>`
+  );
+}
+
+// CSS.escape shim for older engines — quote a session id used in an attribute selector.
+function cssEscape(v) {
+  return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/["\\]/g, "\\$&");
+}
+
 // ---------- Analytics ----------
 async function renderAnalytics() {
   if (!cache.analytics || cache.analytics.days !== analyticsDays) {
-    const [data, retention] = await Promise.all([
+    const [data, retention, clientSessions] = await Promise.all([
       fetchJson("/api/analytics?days=" + analyticsDays),
       cache.retention ? Promise.resolve(cache.retention) : fetchJson("/api/retention?weeks=8"),
+      fetchJson("/api/client-sessions?days=" + analyticsDays + "&limit=50"),
     ]);
     cache.retention = retention;
-    cache.analytics = { days: analyticsDays, data };
+    cache.analytics = { days: analyticsDays, data, clientSessions };
   }
   const a = cache.analytics.data;
   const ret = cache.retention;
@@ -377,8 +461,21 @@ async function renderAnalytics() {
       ${statTile("Daily active", a.dau)}
       ${statTile("New users", a.newUsers, "sessions")}
       ${statTile("Total sessions", a.totalSessions)}
-      ${statTile("Avg. session", fmtDuration(a.avgSessionSeconds))}
       ${statTile("Sessions / user", a.sessionsPerUser.toFixed(2))}
+    </section>
+    <h2 class="section-title">Session engagement</h2>
+    <p class="panel-hint">Active time = foreground &amp; not idle (real usage). Wall-clock = process lifetime — inflated by minimized/backgrounded apps. Median is the stable "typical session".</p>
+    <section class="cards tiles">
+      ${a.clientSessions > 0 ? `
+        ${statTile("Median active", fmtDuration(a.medianActiveSessionSeconds))}
+        ${statTile("Avg. active", fmtDuration(a.avgActiveSessionSeconds))}
+        ${statTile("Median wall", fmtDuration(a.medianSessionSeconds))}
+        ${kpiTile("Engagement", Math.round(a.engagementRatio * 100) + "%", { cls: "sessions", sub: "active / wall-clock" })}
+        ${statTile("Active sessions", a.clientSessions)}
+      ` : `
+        ${kpiTile("Median wall session", fmtDuration(a.medianSessionSeconds), { sub: "wall-clock — no active-time data yet" })}
+        ${statTile("Avg. wall session", fmtDuration(a.avgSessionSeconds))}
+      `}
     </section>
     <section class="panel wide">
       <h2>Active &amp; new users (last ${a.days} days)</h2>
@@ -387,8 +484,18 @@ async function renderAnalytics() {
     </section>
     <section class="panels">
       <div class="panel"><h2>Sessions per day</h2><div id="an-sessions"></div></div>
-      <div class="panel"><h2>Session duration</h2><div id="an-duration"></div></div>
+      <div class="panel"><h2>Session length (wall-clock)</h2><div id="an-duration"></div></div>
     </section>
+    ${a.clientSessions > 0 ? `
+    <section class="panels">
+      <div class="panel"><h2>Active time per session</h2><div id="an-active-duration"></div></div>
+      <div class="panel"><h2>Active vs wall-clock</h2><p class="panel-hint">How much of each open session was real usage. Higher = less idle/backgrounded time.</p><div id="an-engagement"></div></div>
+    </section>
+    <section class="panel wide">
+      <h2>Recent sessions</h2>
+      <p class="panel-hint">Click a row to see what happened during that session.</p>
+      <div class="table-wrap" id="an-client-sessions"></div>
+    </section>` : ""}
     <section class="panels">
       <div class="panel"><h2>Active users by app version</h2><div class="breakdown" id="an-versions"></div></div>
       <div class="panel"><h2>OS distribution</h2><div class="breakdown" id="an-os"></div></div>
@@ -416,6 +523,22 @@ async function renderAnalytics() {
     document.getElementById("an-duration"),
     a.durationBuckets.map((b) => ({ label: b.key, value: b.count }))
   );
+  if (a.clientSessions > 0) {
+    renderBarChart(
+      document.getElementById("an-active-duration"),
+      a.activeDurationBuckets.map((b) => ({ label: b.key, value: b.count })),
+      { color: "var(--series-1)" }
+    );
+    const eng = Math.round((a.engagementRatio || 0) * 100);
+    renderHBars(document.getElementById("an-engagement"), [
+      { key: "Active", count: eng },
+      { key: "Idle / background", count: Math.max(0, 100 - eng) },
+    ]);
+    renderClientSessionsTable(
+      document.getElementById("an-client-sessions"),
+      (cache.analytics.clientSessions || [])
+    );
+  }
   renderHBars(document.getElementById("an-versions"), a.versionDistribution);
   renderHBars(document.getElementById("an-os"), a.osDistribution);
   renderHBars(document.getElementById("an-devices"), a.deviceDistribution);
@@ -1157,6 +1280,11 @@ async function renderMaintenance() {
         <p class="maint-desc">A product-analytics event → <code>/api/track</code>. Appears under Events.</p>
         <button class="primary" data-action="track">Send track event</button>
       </div>
+      <div class="maint-card">
+        <h2>Test active session</h2>
+        <p class="maint-desc">An <code>@session</code> active-time ping → <code>/api/track</code>. Appears under Analytics → Session engagement / Recent sessions.</p>
+        <button class="primary" data-action="activesession">Send active session</button>
+      </div>
     </section>
     <section class="panel wide">
       <h2>Activity log</h2>
@@ -1442,6 +1570,28 @@ async function maintSend(action, btn) {
       kind = "custom event";
       route = "events";
       detail = "maintenance_test_event";
+    } else if (action === "activesession") {
+      // A cumulative active-time ping: ~4 min active out of a ~10 min process lifetime.
+      const active = 240, wall = 600;
+      res = await postRaw("/api/track", JSON.stringify({
+        userId: maintUserId(),
+        sessionId: uuid(),
+        release: MAINT_RELEASE,
+        os: navigator.userAgent,
+        events: [{
+          name: "@session",
+          timestamp: new Date(now).toISOString(),
+          properties: {
+            activeSeconds: active,
+            wallSeconds: wall,
+            startedUtc: new Date(now - wall * 1000).toISOString(),
+            platform: "Maintenance",
+          },
+        }],
+      }), "application/json");
+      kind = "active session";
+      route = "analytics";
+      detail = `${fmtDuration(active)} active / ${fmtDuration(wall)} wall`;
     } else {
       return;
     }

@@ -14,6 +14,11 @@ public interface IEventStorage
     Task SaveTrackEventsAsync(IEnumerable<TrackEvent> trackEvents);
     Task<ImmutableList<TrackEvent>> GetRecentTrackEventsAsync();
 
+    // Client-reported active-time sessions ("@session" pings). Upserted by id with a max-merge.
+    Task SaveClientSessionsAsync(IEnumerable<ClientSession> sessions);
+    Task<ImmutableList<ClientSessionRow>> GetRecentClientSessionsAsync(int days, int limit);
+    Task<ClientSessionDetail?> GetClientSessionAsync(string id);
+
     Task<DashboardStats> GetStatsAsync();
 
     Task<AnalyticsData> GetAnalyticsAsync(int days);

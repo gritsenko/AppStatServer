@@ -11,12 +11,22 @@ public class AnalyticsData
     public int NewUsers { get; set; }       // users whose first-ever event falls in the window
 
     public int TotalSessions { get; set; }
-    public double AvgSessionSeconds { get; set; }
+    public double AvgSessionSeconds { get; set; }   // Sentry release-health wall-clock (all clients)
     public double SessionsPerUser { get; set; }
+
+    // Client-reported ACTIVE-time sessions (foreground & not idle). Zero/empty when the window has
+    // no new-client data — the dashboard then falls back to the wall-clock figure above.
+    public int ClientSessions { get; set; }
+    public double AvgActiveSessionSeconds { get; set; }
+    public double MedianActiveSessionSeconds { get; set; }
+    public double AvgClientWallSeconds { get; set; }        // wall-clock of the SAME client sessions
+    public double MedianSessionSeconds { get; set; }        // median of Sentry wall sessions (robust vs 6h outliers)
+    public double EngagementRatio { get; set; }             // sum(active)/sum(wall) over client sessions, 0..1
 
     public List<DayPoint> UsersPerDay { get; set; } = [];       // active + new, per day
     public List<DailyCount> SessionsPerDay { get; set; } = [];
-    public List<CountByKey> DurationBuckets { get; set; } = []; // session length histogram
+    public List<CountByKey> DurationBuckets { get; set; } = []; // session length histogram (wall-clock)
+    public List<CountByKey> ActiveDurationBuckets { get; set; } = []; // active-time histogram
     public List<CountByKey> VersionDistribution { get; set; } = []; // active users per release
     public List<CountByKey> OsDistribution { get; set; } = [];   // active users per OS
     public List<CountByKey> DeviceDistribution { get; set; } = []; // active users per device model

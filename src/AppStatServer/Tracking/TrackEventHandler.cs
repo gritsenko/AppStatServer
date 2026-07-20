@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using AppStatServer.Data;
 
 namespace AppStatServer.Tracking;
 
@@ -13,10 +14,30 @@ public class TrackEventHandler
             var body = await ReadBodyAsync(request);
             var events = TrackEventParser.Parse(body);
 
-            if (events.Count > 0)
-                await eventStorage.SaveTrackEventsAsync(events);
+            // Split off reserved infrastructure events (name starting with '@'): "@session" active-time
+            // pings become ClientSession upserts and are NOT stored among product events; any other
+            // reserved event is dropped so it can never pollute product reports.
+            var productEvents = new List<TrackEvent>(events.Count);
+            var sessions = new List<Data.ClientSession>();
+            foreach (var e in events)
+            {
+                if (!ClientSessionMapper.IsReserved(e.Name))
+                {
+                    productEvents.Add(e);
+                    continue;
+                }
 
-            return Results.Ok(new { accepted = events.Count });
+                if (e.Name == ClientSessionMapper.SessionEventName &&
+                    ClientSessionMapper.FromTrackEvent(e) is { } session)
+                    sessions.Add(session);
+            }
+
+            if (productEvents.Count > 0)
+                await eventStorage.SaveTrackEventsAsync(productEvents);
+            if (sessions.Count > 0)
+                await eventStorage.SaveClientSessionsAsync(sessions);
+
+            return Results.Ok(new { accepted = productEvents.Count + sessions.Count });
         }).RequireCors(corsPolicy);
     }
 

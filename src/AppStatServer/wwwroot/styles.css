@@ -535,6 +535,16 @@ td.time, td.num { font-variant-numeric: tabular-nums; white-space: nowrap; color
 
 .empty { padding: 40px; text-align: center; color: var(--muted); }
 
+/* ---------- Client-session table + timeline ---------- */
+tbody tr.cs-row { cursor: pointer; }
+tbody tr.cs-row:hover { background: var(--surface-2); }
+tbody tr.cs-detail > td { background: var(--surface-2); padding: 8px 14px; }
+.session-timeline { display: flex; flex-direction: column; gap: 4px; }
+.tl-row { display: flex; gap: 10px; align-items: baseline; font-size: 12px; }
+.tl-offset { color: var(--muted); min-width: 64px; text-align: right; }
+.tl-name { color: var(--text); font-weight: 600; }
+.tl-props { color: var(--text-2); }
+
 /* ---------- Modal ---------- */
 .modal-backdrop {
   position: fixed;
