@@ -61,7 +61,8 @@ public class DiagnosticsTools(IEventStorage storage)
     [McpServerTool(Name = "get_issue")]
     [Description(
         "Get the full detail of a single crash/error signature by its 'key', including the " +
-        "stack trace of the most recent occurrence plus OS, device and release. Use this to " +
+        "stack trace of the most recent occurrence plus OS, device, CPU architecture and " +
+        "release. Use this to " +
         "locate and fix the offending code.")]
     public async Task<object?> GetIssue(
         [Description("The signature key from list_diagnostics (e.g. 'crash|NullReferenceException: ...').")]
@@ -105,6 +106,7 @@ public class DiagnosticsTools(IEventStorage storage)
                 level = s.Level,
                 os = s.Os,
                 device = s.DeviceModel,
+                arch = s.Arch,
                 release = s.Release,
                 userId = s.UserId,
                 traceId = s.TraceId,

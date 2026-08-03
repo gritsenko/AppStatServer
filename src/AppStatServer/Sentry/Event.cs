@@ -107,6 +107,12 @@ public class Device
     public string? family { get; set; }
     public string? brand { get; set; }
     public string? name { get; set; }
+
+    // CPU architecture the app ran on ("x64", "arm64", …) plus the free-form CPU description
+    // some SDKs send instead. Crash triage needs this: arm64-only and x86-only failures look
+    // identical in the stack.
+    public string? arch { get; set; }
+    public string? cpu_description { get; set; }
 }
 
 public class Os

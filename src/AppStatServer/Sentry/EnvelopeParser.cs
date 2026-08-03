@@ -100,6 +100,7 @@ public static partial class EnvelopeParser
             Os = eventEntry.contexts?.os?.raw_description,
             DeviceModel = eventEntry.contexts?.device?.model
                           ?? eventEntry.contexts?.device?.family,
+            Arch = ExtractArch(eventEntry),
             UserId = eventEntry.user?.id ?? Guid.Empty.ToString(),
         };
     }
@@ -152,6 +153,43 @@ public static partial class EnvelopeParser
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Re-reads the CPU architecture from a raw persisted event entry (the JSON stored in
+    /// <see cref="AppEvent.EventEntry"/>), so events ingested before the field existed still
+    /// report it. Returns null when the payload can't be parsed or carries no architecture.
+    /// </summary>
+    public static string? ExtractArchFromRaw(string? rawEntry)
+    {
+        if (string.IsNullOrWhiteSpace(rawEntry))
+            return null;
+
+        try
+        {
+            var eventEntry = JsonSerializer.Deserialize<EventEntry>(rawEntry);
+            return eventEntry is null ? null : ExtractArch(eventEntry);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    // contexts.device.arch is what the Sentry SDKs send ("x64", "arm64"). Senders that build the
+    // payload by hand often have no device context at all, so fall back to the CPU description
+    // and then to an app-attached extra before giving up.
+    private static string? ExtractArch(EventEntry eventEntry)
+    {
+        var arch = eventEntry.contexts?.device?.arch
+                   ?? eventEntry.contexts?.device?.cpu_description;
+
+        if (string.IsNullOrWhiteSpace(arch) && TryGetExtraString(eventEntry, "arch", out var fromExtra))
+            arch = fromExtra;
+        if (string.IsNullOrWhiteSpace(arch) && TryGetExtraString(eventEntry, "architecture", out fromExtra))
+            arch = fromExtra;
+
+        return string.IsNullOrWhiteSpace(arch) ? null : arch.Trim();
     }
 
     private static string? BuildStackTrace(EventEntry eventEntry)

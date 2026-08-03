@@ -70,7 +70,15 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
     public Task<ImmutableList<AppEvent>> GetRecentEventsAsync()
     {
         var col = _db.GetCollection<AppEvent>("events");
-        var result = col.Find(x => true, 0, 100);
+        var result = col.Find(x => true, 0, 100).ToList();
+
+        // Events stored before Arch existed still carry the architecture in their raw payload —
+        // read it back so the log list reports it too. Mutating the returned copies is safe:
+        // LiteDB materialises a fresh instance per Find.
+        foreach (var ev in result)
+            if (string.IsNullOrWhiteSpace(ev.Arch))
+                ev.Arch = EnvelopeParser.ExtractArchFromRaw(ev.EventEntry);
+
         return Task.FromResult(result.ToImmutableList());
     }
 
@@ -749,6 +757,10 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 var rebuilt = EnvelopeParser.BuildStackTraceFromRaw(latest.EventEntry);
                 if (!string.IsNullOrWhiteSpace(rebuilt))
                     latest.StackTrace = rebuilt;
+                // Same idea for the CPU architecture: events stored before the field existed
+                // still carry it inside their raw payload.
+                if (string.IsNullOrWhiteSpace(latest.Arch))
+                    latest.Arch = EnvelopeParser.ExtractArchFromRaw(latest.EventEntry);
                 // Pull the app-attached extras out of the raw payload before trimming it, so the
                 // signature keeps its triage context (esp. for frame-less AOT stacks).
                 var context = EnvelopeParser.ExtractExtras(latest.EventEntry);

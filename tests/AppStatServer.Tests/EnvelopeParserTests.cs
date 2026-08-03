@@ -8,7 +8,7 @@ public class EnvelopeParserTests
     private const string EventEnvelope =
         """{"sdk":{"name":"sentry.dotnet","version":"4.13.0"},"event_id":"abc123","sent_at":"2024-04-18T20:00:01Z"}""" + "\n" +
         """{"type":"event","length":42}""" + "\n" +
-        """{"event_id":"abc123","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"myapp@1.2.3","exception":{"values":[{"type":"System.Exception","value":"boom"}]},"threads":{"values":[{"id":1,"crashed":true,"stacktrace":{"frames":[{"function":"Outer","filename":"Outer.cs","lineno":5,"in_app":true},{"function":"Inner","filename":"Inner.cs","lineno":10,"in_app":true}]}}]},"contexts":{"trace":{"span_id":"span1","trace_id":"trace1"},"os":{"raw_description":"Windows 11"},"device":{"model":"iPhone14,2","family":"iPhone"}},"user":{"id":"user-1"}}""";
+        """{"event_id":"abc123","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"myapp@1.2.3","exception":{"values":[{"type":"System.Exception","value":"boom"}]},"threads":{"values":[{"id":1,"crashed":true,"stacktrace":{"frames":[{"function":"Outer","filename":"Outer.cs","lineno":5,"in_app":true},{"function":"Inner","filename":"Inner.cs","lineno":10,"in_app":true}]}}]},"contexts":{"trace":{"span_id":"span1","trace_id":"trace1"},"os":{"raw_description":"Windows 11"},"device":{"model":"iPhone14,2","family":"iPhone","arch":"arm64"}},"user":{"id":"user-1"}}""";
 
     private const string SessionEnvelope =
         """{"sid":"session-1","did":"device-1","init":true,"started":"2024-04-18T20:00:00Z","timestamp":"2024-04-18T20:05:00Z","seq":2,"duration":300,"errors":1,"attrs":{"release":"myapp@1.2.3","environment":"production"}}""";
@@ -31,6 +31,7 @@ public class EnvelopeParserTests
         await Assert.That(ev.SpanId).IsEqualTo("span1");
         await Assert.That(ev.Os).IsEqualTo("Windows 11");
         await Assert.That(ev.DeviceModel).IsEqualTo("iPhone14,2");
+        await Assert.That(ev.Arch).IsEqualTo("arm64");
         await Assert.That(ev.UserId).IsEqualTo("user-1");
         await Assert.That(parsed.LastId).IsEqualTo("abc123");
     }
@@ -89,6 +90,35 @@ public class EnvelopeParserTests
         await Assert.That(extras["app_context"]).IsEqualTo("plat=Android tool=Brush");
         await Assert.That(extras["last_command"]).IsEqualTo("Undo");
         await Assert.That(extras.ContainsKey("exception_chain")).IsTrue();
+    }
+
+    // Senders that hand-build the payload have no device context; the architecture then arrives
+    // as an extra (or as the free-form CPU description).
+    private const string CpuDescriptionEnvelope =
+        """{"event_id":"cpu-1","timestamp":"2024-04-18T20:00:00Z","level":"error","exception":{"values":[{"type":"System.Exception","value":"boom"}]},"contexts":{"device":{"cpu_description":" x86_64 "}}}""";
+
+    private const string ArchExtraEnvelope =
+        """{"event_id":"cpu-2","timestamp":"2024-04-18T20:00:00Z","level":"error","exception":{"values":[{"type":"System.Exception","value":"boom"}]},"extra":{"architecture":"Arm64"}}""";
+
+    [Test]
+    public async Task Arch_falls_back_to_cpu_description_then_extras()
+    {
+        var fromCpu = EnvelopeParser.Parse(CpuDescriptionEnvelope).Events[0];
+        var fromExtra = EnvelopeParser.Parse(ArchExtraEnvelope).Events[0];
+
+        await Assert.That(fromCpu.Arch).IsEqualTo("x86_64");
+        await Assert.That(fromExtra.Arch).IsEqualTo("Arm64");
+    }
+
+    [Test]
+    public async Task Extract_arch_from_raw_reads_already_stored_payloads()
+    {
+        // Events ingested before AppEvent.Arch existed still carry it in the raw payload.
+        await Assert.That(EnvelopeParser.ExtractArchFromRaw(EventEnvelope.Split('\n')[2])).IsEqualTo("arm64");
+        await Assert.That(EnvelopeParser.ExtractArchFromRaw(null)).IsNull();
+        await Assert.That(EnvelopeParser.ExtractArchFromRaw("not json")).IsNull();
+        // Present but architecture-less payload — no invented value.
+        await Assert.That(EnvelopeParser.ExtractArchFromRaw(ExceptionFramesEnvelope)).IsNull();
     }
 
     [Test]

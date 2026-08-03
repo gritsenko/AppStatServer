@@ -1698,6 +1698,7 @@ function buildEventReport(ev, group) {
   if (release) summary.push(["Release", release]);
   if (ev.os) summary.push(["OS", ev.os]);
   if (ev.deviceModel) summary.push(["Device", ev.deviceModel]);
+  if (ev.arch) summary.push(["Arch", ev.arch]);
   lines.push("## Summary", ...summary.map(([k, v]) => `- ${k}: ${v}`), "");
 
   const meta = [];
@@ -1821,6 +1822,7 @@ function openEventModal(ev, group, onResolve) {
     ["Release", ev.release],
     ["OS", ev.os],
     ["Device", ev.deviceModel],
+    ["Arch", ev.arch],
     ["User", ev.userId],
     ["Session", ev.sessionId],
     ["Trace", ev.traceId],
