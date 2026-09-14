@@ -4,12 +4,22 @@ namespace AppStatServer.Sentry;
 // Any field can legitimately be absent in a given payload, so reference-type
 // members are nullable by design.
 
+// How an exception reached the SDK. "handled": false is Sentry's canonical marker for an
+// unhandled exception — i.e. one that terminated the process — and "type" names the source
+// ("ANR" for an Application Not Responding report raised by the Android SDK).
+public class Mechanism
+{
+    public string? type { get; set; }
+    public bool? handled { get; set; }
+}
+
 public class ExceptionValue
 {
     public string? type { get; set; }
     public string? value { get; set; }
     public string? module { get; set; }
     public int thread_id { get; set; }
+    public Mechanism? mechanism { get; set; }
 
     // The Sentry .NET SDK attaches the managed call stack to the exception entry itself
     // (not always to a thread), so an exception captured via CaptureException carries its
@@ -211,4 +221,10 @@ public class EventEntry
     // stack_trace_text (capture-site fallback), exception_chain, app_context, last_command.
     // On trimmed/AOT builds where the exception carries no frames, this is the only stack we get.
     public Dictionary<string, System.Text.Json.JsonElement>? extra { get; set; }
+
+    // Scope tags. Apps that report a crash they only learned about afterwards (an ANR or a native
+    // signal recovered from the OS exit record) have no exception and no crashed thread to give us,
+    // so these tags — crash_recovered, crash_source, signal — are the only thing that says the
+    // event describes a process death rather than a log line.
+    public Dictionary<string, string>? tags { get; set; }
 }

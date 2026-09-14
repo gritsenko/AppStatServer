@@ -302,6 +302,87 @@ public class LiteDbEventStorageTests
         await Assert.That(report.ErrorsPerDay.Sum(d => d.Count)).IsEqualTo(2);
     }
 
+    // The raw payload of an ANR the app recovered from the OS exit record: no exception, no
+    // crashed thread, only a fatal level and tags. Events like this were stored with IsCrash and
+    // IsError both false, so they sat in the plain event log and never reached diagnostics.
+    private const string RecoveredAnrPayload =
+        """{"event_id":"anr-1","timestamp":"2024-04-18T20:00:00Z","level":"fatal","logentry":{"message":"ANR in MainActivity.onCreate"},"tags":{"crash_recovered":"true","crash_source":"ProcessExit:Anr","signal":"ANR"},"extra":{"exit_trace":"\"main\" prio=5 tid=1 Blocked"}}""";
+
+    [Test]
+    public async Task Diagnostics_reports_anrs_as_their_own_kind()
+    {
+        using var storage = NewInMemoryStorage();
+        var now = DateTime.Now;
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent
+            {
+                Id = "anr-1", UserId = "u1", Level = "fatal", Message = "ANR in MainActivity.onCreate",
+                IsCrash = true, IsError = true, IsAnr = true,
+                EventEntry = RecoveredAnrPayload, Release = "1.0.0", Timestamp = now,
+            },
+            new AppEvent { Id = "c1", UserId = "u2", Level = "fatal", Message = "Fatal", IsError = true, IsCrash = true, Release = "1.0.0", Timestamp = now },
+        ]);
+
+        var report = await storage.GetDiagnosticsAsync(30);
+
+        await Assert.That(report.TotalAnrs).IsEqualTo(1);
+        // An ANR is still a crash for counting and charting — it just gets its own kind.
+        await Assert.That(report.TotalCrashes).IsEqualTo(2);
+
+        var anr = report.Groups.Single(g => g.Kind == "anr");
+        await Assert.That(anr.Key).IsEqualTo("anr|ANR in MainActivity.onCreate");
+        await Assert.That(anr.Tags!["signal"]).IsEqualTo("ANR");
+        await Assert.That(anr.Context!["exit_trace"]).Contains("main");
+        // The plain crash keeps its own kind and is not double-counted as an ANR.
+        await Assert.That(report.Groups.Count(g => g.Kind == "crash")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Diagnostics_rescues_anrs_stored_under_the_old_classification()
+    {
+        using var storage = NewInMemoryStorage();
+
+        await storage.SaveEventsAsync(
+        [
+            // Exactly how the old classifier persisted it: filed as a plain log event.
+            new AppEvent
+            {
+                Id = "anr-1", UserId = "u1", Level = "fatal", Message = "ANR in MainActivity.onCreate",
+                IsCrash = false, IsError = false, IsAnr = false,
+                EventEntry = RecoveredAnrPayload, Release = "1.0.0", Timestamp = DateTime.Now,
+            },
+        ]);
+
+        var report = await storage.GetDiagnosticsAsync(30);
+
+        await Assert.That(report.TotalAnrs).IsEqualTo(1);
+        await Assert.That(report.Groups.Single().Kind).IsEqualTo("anr");
+    }
+
+    [Test]
+    public async Task Diagnostics_leaves_plain_log_events_out_even_with_a_raw_payload()
+    {
+        using var storage = NewInMemoryStorage();
+
+        await storage.SaveEventsAsync(
+        [
+            new AppEvent
+            {
+                Id = "i1", UserId = "u1", Level = "info", Message = "Project opened",
+                EventEntry = """{"event_id":"i1","level":"info","logentry":{"message":"Project opened"}}""",
+                Release = "1.0.0", Timestamp = DateTime.Now,
+            },
+        ]);
+
+        var report = await storage.GetDiagnosticsAsync(30);
+
+        await Assert.That(report.Groups).IsEmpty();
+        await Assert.That(report.TotalCrashes).IsEqualTo(0);
+        await Assert.That(report.TotalErrors).IsEqualTo(0);
+    }
+
     [Test]
     public async Task Diagnostics_can_be_filtered_by_release()
     {

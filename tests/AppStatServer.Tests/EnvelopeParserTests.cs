@@ -192,6 +192,109 @@ public class EnvelopeParserTests
         await Assert.That(parsed.Sessions).IsEmpty();
     }
 
+    // An ANR recovered from the OS exit record on the next launch: a bare message event with no
+    // exception and no thread list, identified only by its level and tags. Filed as a plain log
+    // before the classifier learned to read those, which is why ANRs never reached diagnostics.
+    private const string RecoveredAnrEnvelope =
+        """{"event_id":"anr-1","timestamp":"2024-04-18T20:00:00Z","level":"fatal","release":"pix2d@3.13.0","logentry":{"message":"ANR in com.pix2d.pix2dapp.MainActivity.onCreate"},"tags":{"crash_recovered":"true","crash_source":"ProcessExit:Anr","signal":"ANR","last_command":"SaveProject"},"extra":{"exit_trace":"\"main\" prio=5 tid=1 Blocked at java.lang.Object.wait(Native method)"}}""";
+
+    // The Android SDK's own ANR detector sends a real exception instead, carrying an ANR mechanism.
+    private const string SdkAnrEnvelope =
+        """{"event_id":"anr-2","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"pix2d@3.13.0","exception":{"values":[{"type":"ApplicationNotResponding","value":"Application Not Responding for at least 5000 ms.","mechanism":{"type":"ANR","handled":false}}]}}""";
+
+    // A recovered native crash — same message-only shape as an ANR, but not an ANR.
+    private const string RecoveredNativeCrashEnvelope =
+        """{"event_id":"native-1","timestamp":"2024-04-18T20:00:00Z","level":"fatal","release":"pix2d@3.13.0","logentry":{"message":"Native crash SIGSEGV in libSkiaSharp.so: sk_surface_draw"},"tags":{"crash_recovered":"true","crash_source":"ProcessExit:CrashNative","signal":"SIGSEGV"}}""";
+
+    // A handled error: an exception the app reported and kept running from.
+    private const string HandledErrorEnvelope =
+        """{"event_id":"handled-1","timestamp":"2024-04-18T20:00:00Z","level":"error","release":"pix2d@3.13.0","exception":{"values":[{"type":"System.IO.IOException","value":"Access to the path is denied.","mechanism":{"type":"AppDomain","handled":true}}]},"tags":{"handled":"true"}}""";
+
+    [Test]
+    public async Task Recovered_anr_is_classified_as_a_crash_and_an_anr()
+    {
+        var ev = EnvelopeParser.Parse(RecoveredAnrEnvelope).Events[0];
+
+        await Assert.That(ev.Message).IsEqualTo("ANR in com.pix2d.pix2dapp.MainActivity.onCreate");
+        await Assert.That(ev.IsAnr).IsTrue();
+        // It has no exception and no crashed thread, but the app still died — it must reach
+        // diagnostics rather than the plain event log.
+        await Assert.That(ev.IsCrash).IsTrue();
+        await Assert.That(ev.IsError).IsTrue();
+    }
+
+    [Test]
+    public async Task Sdk_reported_anr_exception_is_classified_as_an_anr()
+    {
+        var ev = EnvelopeParser.Parse(SdkAnrEnvelope).Events[0];
+
+        await Assert.That(ev.IsAnr).IsTrue();
+        // mechanism.handled == false, even though the level is only "error".
+        await Assert.That(ev.IsCrash).IsTrue();
+    }
+
+    [Test]
+    public async Task Recovered_native_crash_is_a_crash_but_not_an_anr()
+    {
+        var ev = EnvelopeParser.Parse(RecoveredNativeCrashEnvelope).Events[0];
+
+        await Assert.That(ev.IsCrash).IsTrue();
+        await Assert.That(ev.IsError).IsTrue();
+        await Assert.That(ev.IsAnr).IsFalse();
+    }
+
+    [Test]
+    public async Task Handled_exception_stays_an_error()
+    {
+        var ev = EnvelopeParser.Parse(HandledErrorEnvelope).Events[0];
+
+        await Assert.That(ev.IsError).IsTrue();
+        await Assert.That(ev.IsCrash).IsFalse();
+        await Assert.That(ev.IsAnr).IsFalse();
+    }
+
+    [Test]
+    public async Task Plain_log_message_is_neither_crash_nor_error()
+    {
+        const string logEnvelope =
+            """{"event_id":"log-1","timestamp":"2024-04-18T20:00:00Z","level":"info","logentry":{"message":"Project opened"}}""";
+
+        var ev = EnvelopeParser.Parse(logEnvelope).Events[0];
+
+        await Assert.That(ev.IsCrash).IsFalse();
+        await Assert.That(ev.IsError).IsFalse();
+        await Assert.That(ev.IsAnr).IsFalse();
+    }
+
+    [Test]
+    public async Task Tags_are_extracted_from_the_raw_payload()
+    {
+        var tags = EnvelopeParser.ExtractTags(EnvelopeParser.Parse(RecoveredAnrEnvelope).Events[0].EventEntry);
+
+        await Assert.That(tags["signal"]).IsEqualTo("ANR");
+        await Assert.That(tags["crash_source"]).IsEqualTo("ProcessExit:Anr");
+        await Assert.That(tags["last_command"]).IsEqualTo("SaveProject");
+    }
+
+    [Test]
+    public async Task Classify_from_raw_reclassifies_an_already_stored_payload()
+    {
+        var raw = EnvelopeParser.Parse(RecoveredAnrEnvelope).Events[0].EventEntry;
+
+        var classification = EnvelopeParser.ClassifyFromRaw(raw);
+
+        await Assert.That(classification).IsNotNull();
+        await Assert.That(classification!.IsCrash).IsTrue();
+        await Assert.That(classification.IsAnr).IsTrue();
+    }
+
+    [Test]
+    public async Task Classify_from_raw_returns_null_for_unusable_payloads()
+    {
+        await Assert.That(EnvelopeParser.ClassifyFromRaw(null)).IsNull();
+        await Assert.That(EnvelopeParser.ClassifyFromRaw("not json")).IsNull();
+    }
+
     [Test]
     public async Task Empty_body_yields_no_records()
     {

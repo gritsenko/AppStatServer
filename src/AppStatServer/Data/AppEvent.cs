@@ -12,6 +12,11 @@ public class AppEvent
     public bool IsCrash { get; set; }
     public bool IsError { get; set; }
 
+    // An Application Not Responding report. Kept apart from a plain crash because it is a
+    // different failure (the app was alive but wedged) and is triaged from a thread dump
+    // rather than a stack.
+    public bool IsAnr { get; set; }
+
     public string Message { get; set; } = string.Empty;
     public string SessionId { get; set; } = string.Empty;
 

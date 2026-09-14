@@ -12,7 +12,7 @@ public class DiagnosticsTools(IEventStorage storage)
 {
     [McpServerTool(Name = "list_diagnostics")]
     [Description(
-        "List crash and handled-error signatures collected from the app, ranked by how many " +
+        "List crash, ANR and handled-error signatures collected from the app, ranked by how many " +
         "times they occurred. Each item is one collapsed signature with a stable 'key' that " +
         "get_issue and resolve_issue accept. Use this to see what is currently broken.")]
     public async Task<object> ListDiagnostics(
@@ -20,7 +20,8 @@ public class DiagnosticsTools(IEventStorage storage)
         int days = 14,
         [Description("Only signatures from this app version (release). Null = all versions.")]
         string? release = null,
-        [Description("Filter by kind: 'crash' (unhandled, app terminated) or 'error' (handled). Null = both.")]
+        [Description("Filter by kind: 'crash' (unhandled, app terminated), 'anr' (Application Not " +
+                     "Responding — the app was wedged, not faulted) or 'error' (handled). Null = all.")]
         string? kind = null,
         [Description("Include already-resolved signatures too. Default false (only open issues).")]
         bool includeResolved = false,
@@ -49,6 +50,7 @@ public class DiagnosticsTools(IEventStorage storage)
             totals = new
             {
                 crashes = report.TotalCrashes,
+                anrs = report.TotalAnrs,   // a subset of crashes
                 errors = report.TotalErrors,
                 affectedUsers = report.AffectedUsers,
                 openGroups = report.OpenGroups,
@@ -60,12 +62,12 @@ public class DiagnosticsTools(IEventStorage storage)
 
     [McpServerTool(Name = "get_issue")]
     [Description(
-        "Get the full detail of a single crash/error signature by its 'key', including the " +
-        "stack trace of the most recent occurrence plus OS, device, CPU architecture and " +
-        "release. Use this to " +
-        "locate and fix the offending code.")]
+        "Get the full detail of a single crash/ANR/error signature by its 'key', including the " +
+        "stack trace of the most recent occurrence plus OS, device, CPU architecture, release, " +
+        "and the tags/extras the app attached. Use this to locate and fix the offending code. " +
+        "For an ANR the stack is a main-thread dump carried in the context, not an exception.")]
     public async Task<object?> GetIssue(
-        [Description("The signature key from list_diagnostics (e.g. 'crash|NullReferenceException: ...').")]
+        [Description("The signature key from list_diagnostics (e.g. 'crash|NullReferenceException: ...', 'anr|ANR in ...').")]
         string key,
         [Description("Rolling window in days to search for the signature (1-90). Default 90.")]
         int days = 90,
@@ -113,13 +115,14 @@ public class DiagnosticsTools(IEventStorage storage)
                 spanId = s.SpanId,
                 stackTrace = s.StackTrace,
                 context,
+                tags = group.Tags,
             },
         };
     }
 
     [McpServerTool(Name = "resolve_issue")]
     [Description(
-        "Mark a crash/error signature resolved (or reopen it) by its 'key'. A resolved issue " +
+        "Mark a crash/ANR/error signature resolved (or reopen it) by its 'key'. A resolved issue " +
         "automatically reopens if the same signature occurs again after this point. Call this " +
         "after you have shipped a fix.")]
     public async Task<object> ResolveIssue(

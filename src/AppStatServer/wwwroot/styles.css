@@ -459,6 +459,7 @@ input:focus, select:focus { border-color: var(--accent); }
   white-space: nowrap;
 }
 .kind-crash { background: var(--critical); }
+.kind-anr { background: var(--warning); }
 .kind-error { background: var(--serious); }
 
 .status {

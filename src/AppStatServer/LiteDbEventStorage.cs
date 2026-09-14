@@ -703,16 +703,25 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         if (!string.IsNullOrEmpty(release))
             all = all.Where(e => e.Release == release).ToList();
 
-        // Crashes = unhandled (a thread crashed). Errors = handled exceptions the app
-        // reported without terminating. The two are disjoint, matching AppCenter.
+        // Events stored before the classifier understood message-only crash reports were filed as
+        // plain logs; re-derive their flags from the raw payload so existing ANRs and recovered
+        // native crashes show up without re-ingesting. Same idea as the stack rebuild below.
+        foreach (var ev in all)
+            Reclassify(ev);
+
+        // Crashes = the app went down. Errors = handled exceptions it reported and kept running
+        // from. ANRs are split out of the crashes as their own kind — they are still crashes for
+        // counting and charting, but they are triaged from a thread dump, not a stack.
         var crashes = all.Where(e => e.IsCrash).ToList();
         var errors = all.Where(e => e.IsError && !e.IsCrash).ToList();
+        var anrs = crashes.Where(e => e.IsAnr).ToList();
 
         var resolutions = _db.GetCollection<Resolution>("resolutions").FindAll()
             .GroupBy(r => r.Key)
             .ToDictionary(g => g.Key, g => g.Max(r => r.ResolvedAt));
 
-        var groups = BuildDiagnosticGroups(crashes, "crash", resolutions)
+        var groups = BuildDiagnosticGroups(crashes.Where(e => !e.IsAnr).ToList(), "crash", resolutions)
+            .Concat(BuildDiagnosticGroups(anrs, "anr", resolutions))
             .Concat(BuildDiagnosticGroups(errors, "error", resolutions))
             .OrderByDescending(g => g.LastSeen)
             .Take(300)
@@ -724,6 +733,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
             Release = release,
             TotalCrashes = crashes.Count,
             TotalErrors = errors.Count,
+            TotalAnrs = anrs.Count,
             AffectedUsers = crashes.Concat(errors)
                 .Select(e => e.UserId).Where(u => !string.IsNullOrEmpty(u)).Distinct().Count(),
             OpenGroups = groups.Count(g => !g.Resolved),
@@ -741,6 +751,32 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
         };
 
         return Task.FromResult(report);
+    }
+
+    /// <summary>
+    /// Upgrades a stored event's crash/error/ANR flags from its raw payload. Only events that could
+    /// possibly change are parsed: a message-only <c>fatal</c> event (an ANR or a native crash the
+    /// app recovered from the OS exit record — the case that was being filed as a plain log), or one
+    /// already known to carry an exception, which may turn out to be unhandled or an ANR. Plain
+    /// info/warning log lines are left alone, so this costs nothing on the bulk of the collection.
+    /// </summary>
+    private static void Reclassify(AppEvent ev)
+    {
+        var worthParsing = ev.IsError
+                           || ev.IsCrash
+                           || string.Equals(ev.Level, "fatal", StringComparison.OrdinalIgnoreCase);
+        if (!worthParsing)
+            return;
+
+        var classification = EnvelopeParser.ClassifyFromRaw(ev.EventEntry);
+        if (classification is null)
+            return;
+
+        // Only ever promotes. A payload we can no longer classify must not silently drop an event
+        // out of diagnostics that the ingest-time classifier had already filed there.
+        ev.IsCrash |= classification.IsCrash;
+        ev.IsError |= classification.IsError;
+        ev.IsAnr |= classification.IsAnr;
     }
 
     // Collapse events into per-message signatures, tagging each with its resolution state.
@@ -764,6 +800,9 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                 // Pull the app-attached extras out of the raw payload before trimming it, so the
                 // signature keeps its triage context (esp. for frame-less AOT stacks).
                 var context = EnvelopeParser.ExtractExtras(latest.EventEntry);
+                // Tags carry what a recovered crash has instead of a stack: signal, crash_source,
+                // last_command. Pulled before the raw payload is trimmed, same as the extras.
+                var tags = EnvelopeParser.ExtractTags(latest.EventEntry);
                 latest.EventEntry = null; // trim the bulky raw payload from the sample
 
                 var lastSeen = g.Max(e => e.Timestamp);
@@ -785,6 +824,7 @@ public class LiteDbEventStorage : IEventStorage, IDisposable
                     ResolvedAt = resolvedAt,
                     Sample = latest,
                     Context = context.Count > 0 ? context : null,
+                    Tags = tags.Count > 0 ? tags : null,
                 };
             })
             .ToList();

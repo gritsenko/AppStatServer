@@ -9,6 +9,7 @@ public class DiagnosticsReport
 
     public int TotalCrashes { get; set; }
     public int TotalErrors { get; set; }
+    public int TotalAnrs { get; set; }    // ANRs, a subset of TotalCrashes
     public int AffectedUsers { get; set; }   // distinct users hit by a crash or error in the window
     public int OpenGroups { get; set; }       // unresolved crash/error signatures
 
@@ -18,8 +19,9 @@ public class DiagnosticsReport
     public List<DiagnosticGroup> Groups { get; set; } = []; // both kinds, newest activity first
 }
 
-// One collapsed crash or error signature. Kind is "crash" (unhandled, app terminated) or
-// "error" (handled exception the app reported and kept running from).
+// One collapsed crash or error signature. Kind is "crash" (unhandled, app terminated), "anr"
+// (Application Not Responding — the app was wedged rather than faulted) or "error" (handled
+// exception the app reported and kept running from).
 public class DiagnosticGroup
 {
     public string Key { get; set; } = string.Empty;   // stable id used to mark it resolved
@@ -43,6 +45,11 @@ public class DiagnosticGroup
     // pulled from the latest occurrence's raw payload before it is trimmed off the Sample.
     // On trimmed/AOT builds these are often the only pointer at the offending code.
     public Dictionary<string, string>? Context { get; set; }
+
+    // Scope tags from the latest occurrence (signal, crash_source, last_command, …). For a crash
+    // recovered from the OS exit record these say what kind of death it was — the payload carries
+    // no exception and no crashed thread to read it from.
+    public Dictionary<string, string>? Tags { get; set; }
 }
 
 // Persisted resolution state, keyed by DiagnosticGroup.Key. A group counts as resolved while

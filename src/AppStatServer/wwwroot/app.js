@@ -786,6 +786,11 @@ const eventsFilter = { release: "", os: "" };
 // release/days are server filters; status/kind/search are applied client-side.
 const diagnostics = { release: "", days: 30, status: "", kind: "", search: "" };
 
+// "anr" is a third kind alongside crash/error: still a death, but the app was wedged rather
+// than faulted, so it is labelled separately instead of falling through to "Error".
+const kindLabel = (kind) =>
+  kind === "crash" ? "Crash" : kind === "anr" ? "ANR" : "Error";
+
 // Server-side platform (os) / app version (release) filters for the Events page.
 const trackFilter = { release: "", os: "" };
 
@@ -933,6 +938,7 @@ async function renderDiagnostics() {
       <select id="diag-kind">
         <option value=""${diagnostics.kind === "" ? " selected" : ""}>Crashes &amp; errors</option>
         <option value="crash"${diagnostics.kind === "crash" ? " selected" : ""}>Crashes only</option>
+        <option value="anr"${diagnostics.kind === "anr" ? " selected" : ""}>ANRs only</option>
         <option value="error"${diagnostics.kind === "error" ? " selected" : ""}>Errors only</option>
       </select>
       <select id="diag-status">
@@ -1015,9 +1021,7 @@ async function renderDiagnostics() {
       `<table><thead><tr><th>Type</th><th>Message</th><th class="num">Count</th><th class="num">Users</th><th>Last seen</th><th>Version</th><th>Status</th><th></th></tr></thead><tbody>` +
       rows
         .map((g, i) => {
-          const kindBadge = g.kind === "crash"
-            ? '<span class="kind kind-crash">Crash</span>'
-            : '<span class="kind kind-error">Error</span>';
+          const kindBadge = `<span class="kind kind-${g.kind || "error"}">${kindLabel(g.kind)}</span>`;
           const statusBadge = g.resolved
             ? '<span class="status resolved">Resolved</span>'
             : '<span class="status open">Open</span>';
@@ -1676,7 +1680,9 @@ function pctClass(v) {
 // Assemble a self-contained, paste-into-an-agent report of a crash/error: all the
 // identifying metadata plus the stack trace (and the raw Sentry payload when present).
 function buildEventReport(ev, group) {
-  const kind = group?.kind === "crash" || ev.isCrash ? "Crash" : ev.isError ? "Error" : "Event";
+  const kind = group?.kind
+    ? kindLabel(group.kind)
+    : ev.isAnr ? "ANR" : ev.isCrash ? "Crash" : ev.isError ? "Error" : "Event";
   const title = (group && group.title) || ev.message || "(no message)";
   const lines = [`# ${kind}: ${title}`, ""];
 
@@ -1788,7 +1794,7 @@ function openEventModal(ev, group, onResolve) {
 
   const groupRows = group
     ? [
-        ...(group.kind ? [["Type", group.kind === "crash" ? "Crash" : "Error"]] : []),
+        ...(group.kind ? [["Type", kindLabel(group.kind)]] : []),
         ["Occurrences", String(group.count)],
         ["Affected users", String(group.users)],
         ["First seen", fmtTime(group.firstSeen)],

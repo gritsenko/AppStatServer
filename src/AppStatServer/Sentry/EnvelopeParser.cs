@@ -5,6 +5,9 @@ using AppStatServer.Data;
 
 namespace AppStatServer.Sentry;
 
+/// <summary>How an event is filed: a crash, a handled error, and whether it is an ANR.</summary>
+public record EventClassification(bool IsCrash, bool IsError, bool IsAnr);
+
 public class ParsedEnvelope
 {
     public List<AppEvent> Events { get; } = new();
@@ -91,8 +94,9 @@ public static partial class EnvelopeParser
             Message = message,
             EventEntry = rawEntry,
             StackTrace = BuildStackTrace(eventEntry),
-            IsCrash = eventEntry.threads?.values?.Any(x => x.crashed) ?? false,
-            IsError = eventEntry.exception != null,
+            IsCrash = IsCrashEvent(eventEntry),
+            IsError = IsErrorEvent(eventEntry),
+            IsAnr = IsAnrEvent(eventEntry),
             Level = eventEntry.level ?? "-",
             Release = ExtractVersion(eventEntry.release),
             SpanId = eventEntry.contexts?.trace?.span_id,
@@ -103,6 +107,91 @@ public static partial class EnvelopeParser
             Arch = ExtractArch(eventEntry),
             UserId = eventEntry.user?.id ?? Guid.Empty.ToString(),
         };
+    }
+
+    /// <summary>
+    /// Whether the event describes a process death (as opposed to a handled error the app
+    /// recovered from). Four independent signals, because no single one is always present:
+    /// <list type="bullet">
+    /// <item>a thread flagged <c>crashed</c> — what a full native/managed crash report carries;</item>
+    /// <item><c>mechanism.handled == false</c> — Sentry's canonical unhandled marker;</item>
+    /// <item>a <c>fatal</c> level — the SDKs reserve it for "the app went down";</item>
+    /// <item>a <c>crash_recovered</c> tag, or an ANR — a crash reconstructed on the next launch
+    /// from the OS exit record, which has neither an exception nor a thread list.</item>
+    /// </list>
+    /// Reading only the first signal is what kept ANRs and every recovered native crash out of the
+    /// diagnostics report: they arrive as message-only events, so they were filed as plain logs.
+    /// </summary>
+    private static bool IsCrashEvent(EventEntry eventEntry)
+    {
+        if (eventEntry.threads?.values?.Any(x => x.crashed) == true)
+            return true;
+
+        if (eventEntry.exception?.values?.Any(v => v.mechanism?.handled == false) == true)
+            return true;
+
+        if (string.Equals(eventEntry.level, "fatal", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return IsTruthyTag(eventEntry, "crash_recovered") || IsAnrEvent(eventEntry);
+    }
+
+    // Anything that belongs in the diagnostics report rather than the plain event log: an
+    // exception the app reported, or a crash (which need not carry one).
+    private static bool IsErrorEvent(EventEntry eventEntry) =>
+        eventEntry.exception != null || IsCrashEvent(eventEntry);
+
+    /// <summary>
+    /// Whether the event is an Application Not Responding report. Two routes reach us: the Android
+    /// SDK's own ANR detector, which sends an <c>ApplicationNotResponding</c> exception carrying an
+    /// <c>ANR</c> mechanism, and an app that recovers the ANR itself from the OS exit record and
+    /// tags the event (Pix2d sends <c>signal=ANR</c> / <c>crash_source=ProcessExit:Anr</c>).
+    /// </summary>
+    private static bool IsAnrEvent(EventEntry eventEntry)
+    {
+        if (eventEntry.exception?.values?.Any(IsAnrException) == true)
+            return true;
+
+        if (eventEntry.tags is not { Count: > 0 } tags)
+            return false;
+
+        return (tags.TryGetValue("signal", out var signal)
+                && signal.Contains("anr", StringComparison.OrdinalIgnoreCase))
+               || (tags.TryGetValue("crash_source", out var source)
+                   && source.Contains("anr", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsAnrException(ExceptionValue value) =>
+        string.Equals(value.mechanism?.type, "ANR", StringComparison.OrdinalIgnoreCase)
+        || (value.type?.Contains("ApplicationNotResponding", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool IsTruthyTag(EventEntry eventEntry, string key) =>
+        eventEntry.tags is not null
+        && eventEntry.tags.TryGetValue(key, out var value)
+        && string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Re-derives the crash/error/ANR classification from a raw persisted event entry (the JSON in
+    /// <see cref="AppEvent.EventEntry"/>), so events stored under the older rules — which filed every
+    /// message-only crash report as a plain log — are reported correctly without re-ingesting.
+    /// Returns null when the payload can't be parsed.
+    /// </summary>
+    public static EventClassification? ClassifyFromRaw(string? rawEntry)
+    {
+        if (string.IsNullOrWhiteSpace(rawEntry))
+            return null;
+
+        try
+        {
+            var eventEntry = JsonSerializer.Deserialize<EventEntry>(rawEntry);
+            return eventEntry is null
+                ? null
+                : new EventClassification(IsCrashEvent(eventEntry), IsErrorEvent(eventEntry), IsAnrEvent(eventEntry));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static AppSession MapSession(SessionEntry session)
@@ -309,6 +398,30 @@ public static partial class EnvelopeParser
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Pulls the scope <c>tags</c> out of a raw event entry. For a crash the app recovered after the
+    /// fact these carry what the payload otherwise lacks — <c>signal</c>, <c>crash_source</c>,
+    /// <c>last_command</c> — so diagnostics surfaces them next to the stack.
+    /// Best-effort: malformed or absent tags yield an empty dictionary rather than throwing.
+    /// </summary>
+    public static Dictionary<string, string> ExtractTags(string? rawEntry)
+    {
+        if (string.IsNullOrWhiteSpace(rawEntry))
+            return new Dictionary<string, string>();
+
+        try
+        {
+            var eventEntry = JsonSerializer.Deserialize<EventEntry>(rawEntry);
+            return eventEntry?.tags is { Count: > 0 } tags
+                ? new Dictionary<string, string>(tags)
+                : new Dictionary<string, string>();
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, string>();
+        }
     }
 
     [GeneratedRegex(@"(\d+\.\d+\.\d+)(\+\w+)?$")]

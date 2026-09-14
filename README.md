@@ -28,8 +28,11 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
   - **Events** — all non-crash events grouped by message (count / affected users / last
     seen), filterable by app version and OS.
   - **Crashes** — AppCenter-style diagnostics: crashes-per-day and errors-per-day charts,
-    plus one combined table of crash and handled-error signatures, filterable by app
-    version, with per-issue resolve/reopen (a resolved issue reopens if it recurs).
+    plus one combined table of crash, ANR and handled-error signatures, filterable by app
+    version and kind, with per-issue resolve/reopen (a resolved issue reopens if it recurs).
+    A crash need not carry an exception: a `fatal` level, an unhandled `mechanism`, or the
+    `crash_recovered` / `signal` tags an app attaches when it reconstructs a death from the OS
+    exit record all count — which is how ANRs and native crashes are picked up.
 
 ### Endpoints
 
@@ -52,7 +55,7 @@ Inspired by the [glitchtip.com](https://glitchtip.com) project.
 | GET    | `/api/funnels/{id}/report?days=` | cookie | Per-step users and conversion % over a window |
 | GET    | `/api/event-groups?release=&os=` | cookie | Non-crash events grouped by message (optional version/OS filter) |
 | GET    | `/api/crash-groups?release=&os=` | cookie | Crashes grouped by signature (optional version/OS filter) |
-| GET    | `/api/diagnostics?days=&release=` | cookie | Crashes + handled errors: per-day series and grouped signatures with resolution state (days 1–90, optional version filter) |
+| GET    | `/api/diagnostics?days=&release=` | cookie | Crashes, ANRs + handled errors: per-day series and grouped signatures with resolution state (days 1–90, optional version filter) |
 | POST   | `/api/resolve`       | cookie | Mark a crash/error group resolved or reopen it (`{ "key", "resolved" }`) |
 | GET    | `/api/facets`        | cookie | Distinct releases & OSes for the filter dropdowns |
 | GET    | `/api/maintenance/purge-preview?olderThanDays=` | cookie | What a purge would remove: counts and logical bytes |
@@ -98,8 +101,8 @@ Tools:
 
 | Tool             | What it does |
 |------------------|--------------|
-| `list_diagnostics` | Open crash/error signatures ranked by occurrence count (filter by `days`, `release`, `kind`, `includeResolved`). |
-| `get_issue`        | Full detail of one signature by its `key`, including the stack trace of the latest occurrence. |
+| `list_diagnostics` | Open crash/ANR/error signatures ranked by occurrence count (filter by `days`, `release`, `kind` — `crash`, `anr` or `error` — and `includeResolved`). |
+| `get_issue`        | Full detail of one signature by its `key`: the stack trace of the latest occurrence plus the tags and extras the app attached (for an ANR, the main-thread dump). |
 | `resolve_issue`    | Mark a signature resolved (or reopen it) — it auto-reopens if the same crash recurs. |
 
 The dashboard's **Crashes** page has a **Connect MCP** button that shows the endpoint URL,
@@ -119,6 +122,11 @@ env vars, don't commit the token):
   }
 }
 ```
+
+Both env vars must actually be set in the environment Claude Code starts in — an unset
+`${APPSTAT_MCP_URL}` leaves the entry with a literal `${…}` url, and the server is reported as
+`INVALID_CONFIG` rather than silently skipped. A project `.mcp.json` also takes precedence over a
+user-scope server of the same name, so a broken template here shadows a working global entry.
 
 Typical loop: `list_diagnostics` → `get_issue` on the worst one → fix the code → deploy →
 `resolve_issue`.
